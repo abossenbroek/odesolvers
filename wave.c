@@ -248,6 +248,7 @@ main(int argc, char *argv[])
       if ((time % params.freq) == 0)
          send_wave(pde_c, grains, offset, rank, &grain_snd, &offset_snd,
                &pde_snd, comm);
+		
 
       /* Ensure that before the actual computation starts all the processes are
        * at this point in the program. */
@@ -355,13 +356,13 @@ send_wave(double *pde, int grains, int offset, int rank,
       MPI_Comm comm)
 {
    if (rank != 0) {
-      MPI_Ibsend((void *)&grains, 1, MPI_INT, 0, GRAIN_COMM, comm,
+      MPI_Isend((void *)&grains, 1, MPI_INT, 0, GRAIN_COMM, comm,
             grain_send);
-      MPI_Ibsend((void *)&offset, 1, MPI_INT, 0, OFFSET_COMM, comm,
+      MPI_Isend((void *)&offset, 1, MPI_INT, 0, OFFSET_COMM, comm,
             offset_send);
       /* Increase the address of the buffer by one to prevent sending the
        * boundaries used to compute the stencil. */
-      MPI_Ibsend((void *)(pde + 1), grains, MPI_DOUBLE, 0, 
+      MPI_Isend((void *)(pde + 1), grains, MPI_DOUBLE, 0, 
             PDE_COMM, comm, pde_send);
    }
 }
