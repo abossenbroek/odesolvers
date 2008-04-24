@@ -11,8 +11,8 @@ typedef struct {
 	double D;
 	int	 ntotal;
 	int	 ttotal;
-	int	 x;
-	int	 y;
+	int	 l;
+	int	 h;
 } pparams;
 
 int pparams_blength[NUM_PARAMS] = {1, 1, 1, 1, 1, 1, 1};

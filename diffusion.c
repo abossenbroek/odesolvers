@@ -56,13 +56,13 @@ int main(int argc, char *argv[])
 
 	/* Check whether the number of nodes can be used to form a two dimensional
 	 * grid equal height and length. */
-	if (rank == 0 && nnodes / params.x != params.y) {
+	if (rank == 0 && nnodes / params.l != params.h) {
 		usage(); 
 	}
 
 	/* Compute the grid form. */
-	gsize[X_COORD] = params.x;
-	gsize[Y_COORD] = params.y;
+	gsize[X_COORD] = params.l;
+	gsize[Y_COORD] = params.h;
 
 	/* Create a get information of a Cartesian grid topology. */
 	if (MPI_Cart_create(comm, dims, gsize, periods, true, &comm) != 
@@ -113,8 +113,8 @@ getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
 	pparams_displ[2] = (size_t)&(params->D) - (size_t)params;
 	pparams_displ[3] = (size_t)&(params->ntotal) - (size_t)params;
 	pparams_displ[4] = (size_t)&(params->ttotal) - (size_t)params;
-	pparams_displ[5] = (size_t)&(params->x) - (size_t)params;
-	pparams_displ[6] = (size_t)&(params->y) - (size_t)params;
+	pparams_displ[5] = (size_t)&(params->l) - (size_t)params;
+	pparams_displ[6] = (size_t)&(params->h) - (size_t)params;
 
 	MPI_Type_create_struct(NUM_PARAMS, 
 			pparams_blength,
@@ -130,8 +130,8 @@ getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
 	params->dx = -1;
 	params->dt = -1;
 	params->D = -1;
-	params->x = 0;
-	params->y = 0;
+	params->l = 0;
+	params->h = 0;
 	*wavefile = NULL;
 
 	while ((arg = getopt(argc, argv, "x:D:t:f:s:h:l:")) != -1) {
@@ -154,10 +154,10 @@ getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
 					return EX_CANTCREAT;
 				break;
 			case 'l':
-				params->x = (int)strtol(optarg, NULL, 10);
+				params->l = (int)strtol(optarg, NULL, 10);
 				break;
 			case 'h':
-				params->y = (int)strtol(optarg, NULL, 10);
+				params->h = (int)strtol(optarg, NULL, 10);
 				break;
 			default:
 				usage();
@@ -171,7 +171,7 @@ getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
 
 	/* Do some sanity check. */
 	if (params->ntotal < 1 || params->ntotal < 1 || params->D < 0 || *wavefile
-			== NULL || params->x == 0 || params->y == 0)
+			== NULL || params->l == 0 || params->h == 0)
 		usage();
 
 
@@ -182,8 +182,9 @@ getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
 void
 usage(void)
 {
-	fprintf(stderr, "diffusion -D <diffusion> -t <delta t> -x <delta x> ");
-	fprintf(stderr, " -f <file>\n");
+	fprintf(stderr, "diffusion -D <diffusion> -t <delta t> -x <delta x> \n");
+	fprintf(stderr, "          -f <file> -s <status file> -l <length>   \n");
+	fprintf(stderr, "          -h <height>\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Note that since a two dimensional grid is used the");
 	fprintf(stderr, "number of nodes should always be h * l\n");
