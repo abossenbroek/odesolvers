@@ -59,7 +59,7 @@ void send_wave(double *pde, int grains, int offset, int rank,
       *pde_send, MPI_Comm comm);
 
 int getparams(int argc, char *argv[], solve_params *params, FILE **wavefile,
-      MPI_Datatype *solve_params_dt, int rank);
+		FILE **satusfile, MPI_Datatype *solve_params_dt, int rank);
 
 int 
 main(int argc, char *argv[])
@@ -67,7 +67,7 @@ main(int argc, char *argv[])
    /* MPI variables. */
    MPI_Comm comm = MPI_COMM_WORLD;
    int nnodes = 5;
-   int periodsic = false;
+   int periods = false;
    int rank;
    MPI_Request grain_snd;
    MPI_Request offset_snd;
@@ -104,6 +104,7 @@ main(int argc, char *argv[])
    /* Arguments. */
    solve_params params;
    FILE	*wavefile = NULL;
+	FILE  *statusfile = NULL;
    /* Initialise the values to be able to detect errors in the parameter
     * specification. */
    params.location = -1;
@@ -130,11 +131,11 @@ main(int argc, char *argv[])
    MPI_Init(&argc, &argv);
    time_start_init = MPI_Wtime();
 
-   /* Find the number of nodes currently in the mpi call. */
-   MPI_Comm_rank(comm, &rank);
+   /* Find the rank of this processors. */
+	MPI_Comm_rank(comm, &rank);
 
-   if ((status = getparams(argc, argv, &params, &wavefile, &solve_params_mpi,
-               rank)) != EX_OK)
+	if ((status = getparams(argc, argv, &params, &wavefile, &statusfile,
+					&solve_params_mpi, rank)) != EX_OK)
       MPI_Abort(comm, status);
 
    /* Send all the parameters to the remaining nodes in the comm. */
@@ -144,7 +145,7 @@ main(int argc, char *argv[])
    MPI_Comm_size(comm, &nnodes);
 
    /* Create a get information of a Cartesian grid topology. */
-   if (MPI_Cart_create(comm, dims, &nnodes, &periodsic, true, &comm) != 
+   if (MPI_Cart_create(comm, dims, &nnodes, &periods, true, &comm) != 
          MPI_SUCCESS) 
       MPI_Abort(comm, EX_UNAVAILABLE);
 
@@ -319,11 +320,12 @@ main(int argc, char *argv[])
    MPI_Allgather(&time_end_init, 1, MPI_DOUBLE, &time_total_init, 1,
          MPI_DOUBLE, comm);
 
-   if (rank == 0)
-      printf("%i %lf %lf %lf\n", nnodes, time_total_comp, time_total_init,
+   if (rank == 0) {
+      fprintf(statusfile, "%i %lf %lf %lf\n", nnodes, time_total_comp, time_total_init,
             time_total_comm);
-
-   fclose(wavefile);
+		fclose(statusfile);
+		fclose(wavefile);
+	}
    free(pde_o);
    free(pde_c);
    free(pde_n);
@@ -420,7 +422,7 @@ print_wave(FILE *fd, double *pde, int grains, int offset, int time, int rank,
 
 int
 getparams(int argc, char *argv[], solve_params *params, FILE **wavefile,
-      MPI_Datatype *solve_params_dt, int rank)
+		FILE **statusfile, MPI_Datatype *solve_params_dt, int rank)
 {
    MPI_Aint solve_params_displ[NUM_PARAMS];
    int	arg;
@@ -446,7 +448,7 @@ getparams(int argc, char *argv[], solve_params *params, FILE **wavefile,
    if (rank > 0)
       return EX_OK;
 
-   while ((arg = getopt(argc, argv, "p:d:l:f:t:n:h:w:c:")) != -1) {
+   while ((arg = getopt(argc, argv, "p:d:l:f:t:n:h:w:c:s:")) != -1) {
       switch (arg) {
          case 'l':
             params->location = strtod(optarg, NULL);
@@ -477,6 +479,10 @@ getparams(int argc, char *argv[], solve_params *params, FILE **wavefile,
             break;
          case 'c':
             params->tau = strtod(optarg, NULL);
+            break;
+			case 's':
+            if ((*statusfile = fopen(optarg, "w+")) == NULL) 
+               return EX_CANTCREAT;
             break;
          default:
             usage();
