@@ -245,7 +245,7 @@ main(int argc, char *argv[])
       time_start_comm = MPI_Wtime();
       /* Send and receive neighbours using non blocking communication. */
 		xcoord_lneigh = (nnodes + xcoord - 1) % nnodes;
-		xcoord_rneigh = (nnodes + 1) % nnodes;
+		xcoord_rneigh = (xcoord + 1) % nnodes;
       
 		MPI_Cart_rank(comm, &xcoord_lneigh, &rank_lneigh);
 		MPI_Cart_rank(comm, &xcoord_rneigh, &rank_rneigh);
@@ -331,9 +331,11 @@ main(int argc, char *argv[])
          MPI_DOUBLE, comm);
 
    if (rank == 0) {
-      fprintf(statusfile, "%i %lf %lf %lf\n", nnodes, time_total_comp, time_total_init,
-            time_total_comm);
-		fclose(statusfile);
+		if (statusfile != NULL) {
+			fprintf(statusfile, "%i %lf %lf %lf\n", nnodes, time_total_comp, time_total_init,
+					time_total_comm);
+			fclose(statusfile);
+		}
 		fclose(wavefile);
 	}
    free(pde_o);
