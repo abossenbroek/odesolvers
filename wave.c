@@ -348,6 +348,7 @@ usage(void)
    fprintf(stderr, "-t <time>     seconds to simulation\n");
    fprintf(stderr, "-n <ntotal>   grain size of length discretization\n");
    fprintf(stderr, "-w <file>     file to store wave information\n");
+   fprintf(stderr, "-s <file>     status file where to store mpi times\n");
    MPI_Abort(MPI_COMM_WORLD, EX_USAGE);
    exit(EX_USAGE);
 }
