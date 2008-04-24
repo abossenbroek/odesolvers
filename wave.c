@@ -29,6 +29,8 @@
 #define __USE_BSD
 #include <math.h>
 
+#include "wave.h"
+
 #ifndef NO_SSE2
    /* Needed for SSE2 */
 #  ifndef __SSE2__
@@ -37,7 +39,10 @@
 #  include <emmintrin.h>
 #endif
 
-#include "wave.h"
+#if MPI_VERSION < 2
+#	error "Need MPI version 2 for this program"
+#endif
+
 
 void usage(void);
 
@@ -51,8 +56,7 @@ void print_wave(FILE *fd, double *pde, int grains, int offset, int time, int
 
 /*
  * This function sends all the information of the node using a non blocking
- * buffered send. It is only executed on nodes with a rank higher than
- * zero.
+ * send. It is only executed on nodes with a rank higher than zero.
  */
 void send_wave(double *pde, int grains, int offset, int rank,
       MPI_Request *grain_send, MPI_Request *offset_send, MPI_Request
@@ -75,6 +79,10 @@ main(int argc, char *argv[])
    MPI_Status  neigh_sts[2];
    MPI_Datatype solve_params_mpi;
    int status;
+	int xcoord_lneigh;
+	int xcoord_rneigh;
+	int rank_lneigh;
+	int rank_rneigh;
 #ifndef NO_SSE2
    int dbl_iter, dbl_iter_r;
    __m128d pde_n_simd; 
@@ -236,14 +244,18 @@ main(int argc, char *argv[])
    for (int time = 0; time < (int)(params.stime / params.delta); time++) {
       time_start_comm = MPI_Wtime();
       /* Send and receive neighbours using non blocking communication. */
-      MPI_Send((void *)&(pde_c[1]), 1, MPI_DOUBLE, (nnodes + xcoord - 1) %
-            nnodes, LVAL_COMM, comm);
-      MPI_Send((void *)&(pde_c[grains]), 1, MPI_DOUBLE, (xcoord + 1) %
-            nnodes, RVAL_COMM, comm);
-      MPI_Recv((void *)&(pde_c[grains + 1]), 1, MPI_DOUBLE, (xcoord + 1) %
-            nnodes, LVAL_COMM, comm, &(neigh_sts[0]));
-      MPI_Recv((void *)&(pde_c[0]), 1, MPI_DOUBLE, (nnodes + xcoord - 1) % nnodes,
-            RVAL_COMM, comm, &(neigh_sts[1]));
+		xcoord_lneigh = (nnodes + xcoord - 1) % nnodes;
+		xcoord_rneigh = (nnodes + 1) % nnodes;
+      
+		MPI_Cart_rank(comm, &xcoord_lneigh, &rank_lneigh);
+		MPI_Cart_rank(comm, &xcoord_rneigh, &rank_rneigh);
+		
+		MPI_Send((void *)&(pde_c[1]), 1, MPI_DOUBLE, rank_lneigh, LVAL_COMM, comm);
+		MPI_Send((void *)&(pde_c[grains]), 1, MPI_DOUBLE, rank_rneigh, RVAL_COMM, comm);
+		MPI_Recv((void *)&(pde_c[grains + 1]), 1, MPI_DOUBLE, rank_rneigh,
+				LVAL_COMM, comm, &(neigh_sts[0]));
+		MPI_Recv((void *)&(pde_c[0]), 1, MPI_DOUBLE, rank_lneigh,
+				RVAL_COMM, comm, &(neigh_sts[1]));
 
       /* Send all the wave information to the root. This send is non blocking. */
       if ((time % params.freq) == 0)
