@@ -6,8 +6,13 @@
 #include <stdlib.h>
 #include <err.h>
 #include <unistd.h>
+#include <string.h>
 
 #include "diffusion.h"
+
+#if MPI_VERSION < 2
+#	error "Need MPI version 2 for this program"
+#endif
 
 void usage(void);
 
@@ -27,8 +32,28 @@ int main(int argc, char *argv[])
 	const int dims = 2;
 	int status;
 	int offset[2];
-	int grains[2];
-	 
+	size_t grains[2];
+	int coord_lneigh[2];
+	int coord_rneigh[2];
+	int coord_uneigh[2];
+	int coord_dneigh[2];
+	int rank_lneigh;
+	int rank_rneigh;
+	int rank_uneigh;
+	int rank_dneigh;
+	MPI_Status xdown_status;
+	MPI_Status xup_status;
+	MPI_Status yleft_status;
+	MPI_Status yright_status;
+	
+	
+
+	float **grid = NULL;
+	float **ngrid = NULL;
+	float *xdown;
+	float *xup;
+
+	float ratio;
 
 	/* Arguments. */
 	pparams params;
@@ -36,9 +61,9 @@ int main(int argc, char *argv[])
 	FILE	*profilefile = NULL;
 	FILE	*statusfile = NULL;
 
-
 	size_t i;
-
+	size_t x, y;
+	long time;
 
 	MPI_Init(&argc, &argv);
    MPI_Comm_rank(comm, &rank);
@@ -72,7 +97,7 @@ int main(int argc, char *argv[])
 	/* Translate the current rank to the coordinate in the Cartesian 
 	 * topology. */
 	MPI_Cart_coords(comm, rank, dims, coord);
-	
+
 
 	/* Using the coordinate of the current node we can determine the amount of
     * points this node has to compute and the offset of the points. */
@@ -85,11 +110,117 @@ int main(int argc, char *argv[])
 		else
 			offset[i] = params.ntotal / gsize[i] * coord[i] + params.ntotal % gsize[i];
 	}
-
-
-	warnx("rank %i (%i, %i) grain (%i, %i) offset (%i, %i)", rank, coord[X_COORD], coord[Y_COORD],
-			grains[0], grains[1], offset[0], offset[1]);
 	
+	/* With the current dimensions arrays which represent the grid can be
+	 * allocated. Two more entries are used to store neighbouring points. 
+	 *
+	 * Grids are composed as follows:
+	 *
+	 * |  |  |  |   |   |       |            |
+	 * |  |  |  |   |   |       |            |
+	 * |  |  |  |   |   |       |            |
+	 * |  |  |  |   |   |       |            |
+	 * |  |  |  |   |   |       |            |
+	 * 0  1  2  ..  ..  ..  grains[x]    grains[x] + 1
+	 * |  |  |  |   |   |       |            |
+	 * |  |  |  |   |   |       |            |
+	 * |  |  |  |   |   |       |            |
+	 * |  |  |  |   |   |       |            |
+	 * |  |  |  |   |   |       |            |
+	 *
+	 *
+	 */
+	if ((grid = calloc(grains[X_COORD] + 2, sizeof(float *))) == NULL ||
+			(ngrid = calloc(grains[X_COORD] + 2, sizeof(float *))) == NULL)
+		MPI_Abort(comm, EX_OSERR);
+
+	for (i = 0; i < grains[X_COORD] + 2; i++)
+		if ((grid[i] = calloc(grains[Y_COORD] + 2, sizeof(float))) == NULL ||
+				(grid[i] = calloc(grains[Y_COORD] + 2, sizeof(float))) == NULL)
+			MPI_Abort(comm, EX_OSERR);
+
+	/* Create temporary storage to prevent iterating through the entire grid. */
+	if ((xdown = calloc(grains[X_COORD], sizeof(float))) == NULL ||
+			(xup = calloc(grains[X_COORD], sizeof(float))) == NULL)
+		MPI_Abort(comm, EX_OSERR);
+
+	if ((ratio = params.dt * params.D * 4 / (params.dx * params.dx)) > 1)
+		ratio = 1;
+
+	for (time = 0; time < params.ttotal; time++) {
+
+		/* Create two new arrays to prevent bad memory access. */
+		for (i = 0; i < grains[X_COORD]; i++) {
+			xup[i] = grid[i][grains[Y_COORD]];
+			xdown[i] = grid[i][1];
+		}
+
+		/* All the coordinates are translated to ranks by first computing the
+		 * coordinate of the appropriate neighbours. Then the coordinates are
+		 * used to determine the rank. These ranks can be used for the
+		 * communication. */
+		coord_lneigh[Y_COORD] = (coord[Y_COORD] + gsize[Y_COORD] - 1) % gsize[Y_COORD];
+		coord_rneigh[Y_COORD] = (coord[Y_COORD] + 1) % gsize[Y_COORD];
+		coord_lneigh[X_COORD] = coord[X_COORD];
+		coord_rneigh[X_COORD] = coord[X_COORD];
+		
+		coord_dneigh[X_COORD] = (coord[X_COORD] + gsize[X_COORD] - 1) % gsize[X_COORD];
+		coord_uneigh[X_COORD] = (coord[X_COORD] + 1) % gsize[X_COORD];
+		coord_dneigh[Y_COORD] = coord[Y_COORD];
+		coord_uneigh[Y_COORD] = coord[Y_COORD];
+
+		MPI_Cart_rank(comm, coord_lneigh, &rank_lneigh);
+		MPI_Cart_rank(comm, coord_rneigh, &rank_rneigh);
+		MPI_Cart_rank(comm, coord_dneigh, &rank_dneigh);
+		MPI_Cart_rank(comm, coord_uneigh, &rank_uneigh);
+
+		/* Ensure that all the processes are at the same point in time before
+		 * starting communication. */
+		MPI_Barrier(comm);
+
+		MPI_Send((void *)xup, grains[X_COORD], MPI_FLOAT, rank_uneigh, X_UP_TAG, comm);
+		MPI_Send((void *)xdown, grains[X_COORD], MPI_FLOAT, rank_dneigh, X_DOWN_TAG, comm);
+		MPI_Send((void *)(grid[grains[X_COORD] + 1] + 1), grains[Y_COORD], MPI_FLOAT,
+				rank_rneigh, Y_RIGHT_TAG, comm);
+		MPI_Send((void *)(grid[1] + 1), grains[Y_COORD], MPI_FLOAT,
+				rank_lneigh, Y_LEFT_TAG, comm);
+
+		MPI_Recv((void *)xup, grains[X_COORD], MPI_FLOAT, rank_dneigh, X_UP_TAG,
+				comm, &xup_status);
+		MPI_Recv((void *)xdown, grains[X_COORD], MPI_FLOAT, rank_uneigh,
+				X_DOWN_TAG, comm, &xdown_status);
+		MPI_Recv((void *)(grid[grains[X_COORD] + 1] + 1), grains[Y_COORD], MPI_FLOAT,
+				rank_lneigh, Y_RIGHT_TAG, comm, &yright_status);
+		MPI_Recv((void *)(grid[1] + 1), grains[Y_COORD], MPI_FLOAT,
+				rank_rneigh, Y_LEFT_TAG, comm, &yleft_status);
+
+		/* The freshly received xup and xdown have to be put in the grid. */
+		for (i = 0; i < grains[X_COORD]; i++) {
+			grid[i][grains[Y_COORD]] = xup[i];
+			grid[i][1] = xdown[i];
+		}
+
+		for (x = 1; x < grains[X_COORD] + 1; x++) {
+			for (y = 1; y < grains[Y_COORD] + 1; y++) {
+				/* Do the finite difference computation. */
+				ngrid[x][y] = grid[x][y] + ratio * (grid[x][y + 1] + grid[x][y - 1]
+						+ grid[x + 1][y] + grid[x - 1][y] - 4 * grid[x][y]);
+			}
+		}
+
+		/* Copy the new grid to the current grid. */
+		for (x = 1; x < grains[X_COORD] + 1; x++)
+			memcpy((void *)(grid[x] + 1), (void *)(ngrid[x] + 1), grains[Y_COORD]
+					* sizeof(float));
+	}
+
+	/* Free the memory used for the grid. */
+	for (i = 0; i < grains[X_COORD] + 2; i++) {
+		free(grid[i]);
+		free(ngrid[i]);
+	}
+
+	free(grid);
 	
 	if (rank == 0) {
 		fclose(statusfile);
@@ -108,6 +239,7 @@ getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
 	MPI_Aint pparams_displ[NUM_PARAMS];
 	int	arg;
 
+	/* Compute the displacements necessary to create a new MPI datatype. */
 	pparams_displ[0] = (size_t)&(params->dx) - (size_t)params;
 	pparams_displ[1] = (size_t)&(params->dt) - (size_t)params;
 	pparams_displ[2] = (size_t)&(params->D) - (size_t)params;
@@ -116,6 +248,7 @@ getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
 	pparams_displ[5] = (size_t)&(params->l) - (size_t)params;
 	pparams_displ[6] = (size_t)&(params->h) - (size_t)params;
 
+	/* Create new MPI datatype. */
 	MPI_Type_create_struct(NUM_PARAMS, 
 			pparams_blength,
 			pparams_displ,
@@ -124,6 +257,7 @@ getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
 
 	MPI_Type_commit(pparams_dt);
 
+	/* Only rank 0 has to parse the parameters. */
 	if (rank > 0)
 		return EX_OK;
 
@@ -137,13 +271,13 @@ getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
 	while ((arg = getopt(argc, argv, "x:D:t:f:s:h:l:")) != -1) {
 		switch (arg) {
 			case 'x':
-				params->dx = strtod(optarg, NULL);
+				params->dx = strtof(optarg, NULL);
 				break;
 			case 'D':
-				params->D = strtod(optarg, NULL);
+				params->D = strtof(optarg, NULL);
 				break;
 			case 't':
-				params->dt = strtod(optarg, NULL);
+				params->dt = strtof(optarg, NULL);
 				break;
 			case 'f':
 				if ((*wavefile = fopen(optarg, "w")) == NULL) 
@@ -166,6 +300,8 @@ getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
 	argc -= optind;
 	argv += optind;
 	
+	/* Although this could be computed every time, we prefer storing the values.
+	 */
 	params->ntotal = (int)(1 / params->dx);
 	params->ttotal = (int)(1 / params->dt);
 
@@ -173,8 +309,6 @@ getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
 	if (params->ntotal < 1 || params->ntotal < 1 || params->D < 0 || *wavefile
 			== NULL || params->l == 0 || params->h == 0)
 		usage();
-
-
 
 	return EX_OK;
 }
