@@ -318,10 +318,8 @@ main(int argc, char *argv[])
                &time_end_comm);
 
       /* Copy the current pde. */
-      for (i = 1; i < grains + 1; i++) {
-         pde_o[i] = pde_c[i];
-         pde_c[i] = pde_n[i];
-      }
+		memcpy((void *)(pde_o + 1), (void *)(pde_c + 1), grains * sizeof(double));
+		memcpy((void *)(pde_c + 1), (void *)(pde_n + 1), grains * sizeof(double));
    }
 
    /* Gather all the computation times. */
