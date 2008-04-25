@@ -239,17 +239,18 @@ main(int argc, char *argv[])
    dbl_iter_r = (grains  - start + end) % 2;
 #endif /* NO_SSE2 */
 
+	/* Send and receive neighbours using non blocking communication. */
+	xcoord_lneigh = (nnodes + xcoord - 1) % nnodes;
+	xcoord_rneigh = (xcoord + 1) % nnodes;
+
+	MPI_Cart_rank(comm, &xcoord_lneigh, &rank_lneigh);
+	MPI_Cart_rank(comm, &xcoord_rneigh, &rank_rneigh);
+
    time_end_init = MPI_Wtime() - time_start_init;
 
    for (int time = 0; time < (int)(params.stime / params.delta); time++) {
       time_start_comm = MPI_Wtime();
-      /* Send and receive neighbours using non blocking communication. */
-		xcoord_lneigh = (nnodes + xcoord - 1) % nnodes;
-		xcoord_rneigh = (xcoord + 1) % nnodes;
-      
-		MPI_Cart_rank(comm, &xcoord_lneigh, &rank_lneigh);
-		MPI_Cart_rank(comm, &xcoord_rneigh, &rank_rneigh);
-		
+     		
 		MPI_Send((void *)&(pde_c[1]), 1, MPI_DOUBLE, rank_lneigh, LVAL_COMM, comm);
 		MPI_Send((void *)&(pde_c[grains]), 1, MPI_DOUBLE, rank_rneigh, RVAL_COMM, comm);
 		MPI_Recv((void *)&(pde_c[grains + 1]), 1, MPI_DOUBLE, rank_rneigh,
