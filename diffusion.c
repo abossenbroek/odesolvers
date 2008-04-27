@@ -34,6 +34,10 @@
 #	error "Need MPI version 2 for this program"
 #endif
 
+#ifndef NO_SEE
+#	include "xmmintrin.h"
+#endif
+
 void usage(void);
 
 int getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
@@ -66,7 +70,18 @@ int main(int argc, char *argv[])
 	MPI_Status yleft_status;
 	MPI_Status yright_status;
 	
-	
+#ifndef NO_SSE
+	__m128	sse_ratio;
+	__m128	sse_ratio1;
+	__m128	curr_grid;
+	__m128	currr_grid;
+	__m128	currl_grid;
+	__m128	curru_grid;
+	__m128	currd_grid;
+	__m128	ngrid_sse;
+
+#endif
+
 
 	float **grid = NULL;
 	float **ngrid = NULL;
@@ -83,6 +98,9 @@ int main(int argc, char *argv[])
 
 	size_t i;
 	size_t x, y;
+#ifndef NO_SSE
+	size_t y_remain;
+#endif
 	long time;
 
 	MPI_Init(&argc, &argv);
@@ -104,7 +122,10 @@ int main(int argc, char *argv[])
 	if (rank == 0 && nnodes / params.l != params.h) {
 		usage(); 
 	}
-
+	/* The grid should be the same on each node. */
+	if (rank == 0 && params.ntotal % (params.l * params.h) != 0) {
+		usage();
+	}
 	/* Compute the grid form. */
 	gsize[X_COORD] = params.l;
 	gsize[Y_COORD] = params.h;
@@ -156,7 +177,7 @@ int main(int argc, char *argv[])
 
 	for (i = 0; i < grains[X_COORD] + 2; i++)
 		if ((grid[i] = calloc(grains[Y_COORD] + 2, sizeof(float))) == NULL ||
-				(grid[i] = calloc(grains[Y_COORD] + 2, sizeof(float))) == NULL)
+				(ngrid[i] = calloc(grains[Y_COORD] + 2, sizeof(float))) == NULL)
 			MPI_Abort(comm, EX_OSERR);
 
 	/* Create temporary storage to prevent iterating through the entire grid. */
@@ -167,36 +188,39 @@ int main(int argc, char *argv[])
 	if ((ratio = params.dt * params.D * 4 / (params.dx * params.dx)) > 1)
 		ratio = 1;
 
-	for (time = 0; time < params.ttotal; time++) {
+#ifndef NO_SSE
+	sse_ratio = _mm_set_ps1(ratio);
+	/* This variable is used to reduce the number of computations when computing
+	 * the finite difference scheme. */
+	sse_ratio1 = _mm_set_ps1(1.0 - 4.0 * ratio);
+	y_remain = grains[Y_COORD] % 4;
+#endif
 
+	/* All the coordinates are translated to ranks by first computing the
+	 * coordinate of the appropriate neighbours. Then the coordinates are
+	 * used to determine the rank. These ranks can be used for the
+	 * communication. */
+	coord_lneigh[Y_COORD] = (coord[Y_COORD] + gsize[Y_COORD] - 1) % gsize[Y_COORD];
+	coord_rneigh[Y_COORD] = (coord[Y_COORD] + 1) % gsize[Y_COORD];
+	coord_lneigh[X_COORD] = coord[X_COORD];
+	coord_rneigh[X_COORD] = coord[X_COORD];
+
+	coord_dneigh[X_COORD] = (coord[X_COORD] + gsize[X_COORD] - 1) % gsize[X_COORD];
+	coord_uneigh[X_COORD] = (coord[X_COORD] + 1) % gsize[X_COORD];
+	coord_dneigh[Y_COORD] = coord[Y_COORD];
+	coord_uneigh[Y_COORD] = coord[Y_COORD];
+
+	MPI_Cart_rank(comm, coord_lneigh, &rank_lneigh);
+	MPI_Cart_rank(comm, coord_rneigh, &rank_rneigh);
+	MPI_Cart_rank(comm, coord_dneigh, &rank_dneigh);
+	MPI_Cart_rank(comm, coord_uneigh, &rank_uneigh);
+
+	for (time = 0; time < params.ttotal; time++) {
 		/* Create two new arrays to prevent bad memory access. */
 		for (i = 0; i < grains[X_COORD]; i++) {
 			xup[i] = grid[i][grains[Y_COORD]];
 			xdown[i] = grid[i][1];
 		}
-
-		/* All the coordinates are translated to ranks by first computing the
-		 * coordinate of the appropriate neighbours. Then the coordinates are
-		 * used to determine the rank. These ranks can be used for the
-		 * communication. */
-		coord_lneigh[Y_COORD] = (coord[Y_COORD] + gsize[Y_COORD] - 1) % gsize[Y_COORD];
-		coord_rneigh[Y_COORD] = (coord[Y_COORD] + 1) % gsize[Y_COORD];
-		coord_lneigh[X_COORD] = coord[X_COORD];
-		coord_rneigh[X_COORD] = coord[X_COORD];
-		
-		coord_dneigh[X_COORD] = (coord[X_COORD] + gsize[X_COORD] - 1) % gsize[X_COORD];
-		coord_uneigh[X_COORD] = (coord[X_COORD] + 1) % gsize[X_COORD];
-		coord_dneigh[Y_COORD] = coord[Y_COORD];
-		coord_uneigh[Y_COORD] = coord[Y_COORD];
-
-		MPI_Cart_rank(comm, coord_lneigh, &rank_lneigh);
-		MPI_Cart_rank(comm, coord_rneigh, &rank_rneigh);
-		MPI_Cart_rank(comm, coord_dneigh, &rank_dneigh);
-		MPI_Cart_rank(comm, coord_uneigh, &rank_uneigh);
-
-		/* Ensure that all the processes are at the same point in time before
-		 * starting communication. */
-		MPI_Barrier(comm);
 
 		MPI_Send((void *)xup, grains[X_COORD], MPI_FLOAT, rank_uneigh, X_UP_TAG, comm);
 		MPI_Send((void *)xdown, grains[X_COORD], MPI_FLOAT, rank_dneigh, X_DOWN_TAG, comm);
@@ -220,18 +244,54 @@ int main(int argc, char *argv[])
 			grid[i][1] = xdown[i];
 		}
 
+		/* Ensure that all the processes are at the same point. */
+		MPI_Barrier(comm);
+
 		for (x = 1; x < grains[X_COORD] + 1; x++) {
+#ifdef NO_SSE
 			for (y = 1; y < grains[Y_COORD] + 1; y++) {
 				/* Do the finite difference computation. */
 				ngrid[x][y] = grid[x][y] + ratio * (grid[x][y + 1] + grid[x][y - 1]
 						+ grid[x + 1][y] + grid[x - 1][y] - 4 * grid[x][y]);
 			}
+#else
+			for (y = 1; y < grains[Y_COORD] + 1 - y_remain; y += 4) {
+				/* Load all the necessary values to  SSE variables. */
+				/* r3 = (x, y + 3)
+				 * r2 = (x, y + 2)
+				 * r1 = (x, y + 1)
+				 * r0 = (x, y)
+				 */
+				curr_grid = _mm_loadu_ps(grid[x] + y);
+				currr_grid = _mm_loadu_ps(grid[x + 1] + y);
+				currl_grid = _mm_loadu_ps(grid[x - 1] + y);
+				curru_grid = _mm_loadu_ps(grid[x] + y + 1);
+				currd_grid = _mm_loadu_ps(grid[x] + y - 1);
+
+				/* Perform arithmetic in an order which should reduce the number of
+				 * bubbles in the processor pipeline. */
+				currr_grid = _mm_add_ps(currr_grid, currl_grid);
+				curru_grid = _mm_add_ps(curru_grid, currd_grid);
+				ngrid_sse = _mm_mul_ps(curr_grid, sse_ratio1);
+				currr_grid = _mm_add_ps(currr_grid, curru_grid);
+				currr_grid = _mm_mul_ps(currr_grid, sse_ratio);
+				ngrid_sse = _mm_add_ps(currr_grid, ngrid_sse);
+				_mm_storeu_ps(ngrid[x] + y, ngrid_sse);
+
+			}
+
+			for (; y < grains[Y_COORD] + 1; y++) {
+				ngrid[x][y] = grid[x][y] + ratio * (grid[x][y + 1] + grid[x][y - 1]
+						+ grid[x + 1][y] + grid[x - 1][y] - 4 * grid[x][y]);
+			}
+#endif /* NO_SSE */
 		}
 
 		/* Copy the new grid to the current grid. */
-		for (x = 1; x < grains[X_COORD] + 1; x++)
+		for (x = 1; x < grains[X_COORD] + 1; x++) 
 			memcpy((void *)(grid[x] + 1), (void *)(ngrid[x] + 1), grains[Y_COORD]
 					* sizeof(float));
+		
 	}
 
 	/* Free the memory used for the grid. */
