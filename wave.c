@@ -78,6 +78,7 @@ main(int argc, char *argv[])
    MPI_Request pde_snd;
    MPI_Status  neigh_sts[2];
    MPI_Datatype solve_params_mpi;
+	MPI_Status	time_sts;
    int status;
 	int xcoord_lneigh;
 	int xcoord_rneigh;
@@ -100,9 +101,7 @@ main(int argc, char *argv[])
    double time_end_init = 0;
    double time_end_comm = 0;
    double time_end_comp = 0;
-   double time_total_init = 0;
-   double time_total_comm = 0;
-   double time_total_comp = 0;
+	double time_recv_buf;
 
    /* Define the dimension of the Cartesian grid. As we want to investigate the
     * wave equation in one dimension. */
@@ -323,18 +322,26 @@ main(int argc, char *argv[])
 		memcpy((void *)(pde_c + 1), (void *)(pde_n + 1), grains * sizeof(double));
    }
 
-   /* Gather all the computation times. */
-   MPI_Allgather(&time_end_comm, 1, MPI_DOUBLE, &time_total_comm, 1,
-         MPI_DOUBLE, comm);
-   MPI_Allgather(&time_end_comp, 1, MPI_DOUBLE, &time_total_comp, 1,
-         MPI_DOUBLE, comm);
-   MPI_Allgather(&time_end_init, 1, MPI_DOUBLE, &time_total_init, 1,
-         MPI_DOUBLE, comm);
+	if (rank != 0) {
+		MPI_Send(&time_end_comm, 1, MPI_DOUBLE, 0, TIME_COMM_TAG, MPI_COMM_WORLD);
+		MPI_Send(&time_end_comp, 1, MPI_DOUBLE, 0, TIME_COMP_TAG, MPI_COMM_WORLD);
+		MPI_Send(&time_end_init, 1, MPI_DOUBLE, 0, TIME_INIT_TAG, MPI_COMM_WORLD);
+	} 
 
-   if (rank == 0) {
+	if (rank == 0) {
+		for (i = 1; i < nnodes; ++i) {
+			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_COMM_TAG, MPI_COMM_WORLD, &time_sts);
+			time_end_comm += time_recv_buf;
+
+			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_COMP_TAG, MPI_COMM_WORLD, &time_sts);
+			time_end_comp += time_recv_buf;
+
+			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_INIT_TAG, MPI_COMM_WORLD, &time_sts);
+			time_end_init += time_recv_buf;
+		}
 		if (statusfile != NULL) {
-			fprintf(statusfile, "%i %lf %lf %lf\n", nnodes, time_total_comp, time_total_init,
-					time_total_comm);
+			fprintf(statusfile, "%i %lf %lf %lf\n", nnodes, time_end_comp, time_end_init,
+					time_end_comm);
 			fclose(statusfile);
 		}
 		fclose(wavefile);
