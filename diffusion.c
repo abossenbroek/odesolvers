@@ -40,8 +40,11 @@
 
 void usage(void);
 
-int getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
+int getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 		FILE **statusfile, MPI_Datatype *solve_params_dt, int rank);
+
+void send_grid(float **grid, size_t *grains, int *offset, int rank, MPI_Comm
+		comm);
 
 int main(int argc, char *argv[])
 {
@@ -301,6 +304,7 @@ int main(int argc, char *argv[])
 	}
 
 	free(grid);
+	free(ngrid);
 	
 	if (rank == 0) {
 		fclose(statusfile);
@@ -312,8 +316,77 @@ int main(int argc, char *argv[])
 	return EX_OK;
 }
 
+void
+send_grid(float **grid, size_t *grains, int *offset, int rank, 
+		MPI_Comm comm)
+{
+	MPI_Request dummy;
+
+	if (rank != 0) {
+		MPI_Isend((void *)grains, 2, MPI_INT, 0, GRAIN_COMM, comm, &dummy);
+		MPI_Isend((void *)offset, 2, MPI_INT, 0, OFFSET_COMM, comm, &dummy);
+
+		for (size_t i = 1; i < grains[X_COORD]; i++) 
+			MPI_Isend((void *)(grid + i), grains[Y_COORD], MPI_FLOAT, 0, GRID_COMM +
+					i - 1, comm, &dummy);
+	}
+}
+
+void 
+print_grid(FILE *fd, float **grid, size_t *grains, int *offset, int time, int rank,
+      int nnodes, MPI_Comm comm) {
+   /* Only rank 0 has to perform this function. */
+   if (rank > 0)
+      return;
+
+	size_t x = 0, y = 0;
+   float *recv_buff;
+   size_t recv_grains[2];
+   int recv_offset[2];
+   MPI_Status status;
+
+   /* When load balancing the node with rank 0 will always have the largest
+    * amount of grains to compute. Therefore the number of grains which are
+    * to be computed by the root can also be used as buffer size. */
+   if ((recv_buff = calloc(grains[X_COORD], sizeof(float))) == NULL) {
+      MPI_Abort(MPI_COMM_WORLD, EX_OSERR);
+   }
+   if (fd == NULL)
+      MPI_Abort(MPI_COMM_WORLD, EX_SOFTWARE);
+
+   /* Print all the values computed by the node with rank 0 */
+   for (x = 0; x < grains[X_COORD]; ++x) 
+		for (y = 0; y < grains[Y_COORD]; ++y) 
+			fprintf(fd, "%i %i %i %i %f\n", time, 0, (int)x, (int)y, grid[x + 1][y + 1]);
+
+   /* Print all the values computed by the nodes with rank > 0. These 
+    * values have to be received from the other nodes. */
+   for (int proc = 1; proc < nnodes; proc++) {
+      /* Perform blocking receives from the non blocking sends. */
+      MPI_Recv((void *)recv_grains, 2, MPI_INT, proc, GRAIN_COMM, comm,
+            &status);
+      MPI_Recv((void *)recv_offset, 2, MPI_INT, proc, OFFSET_COMM, comm,
+            &status);
+		for (x = 0; x < recv_grains[X_COORD]; ++x) {
+			MPI_Recv((void *)recv_buff, recv_grains[Y_COORD], MPI_FLOAT, proc,
+					GRID_COMM + x, comm, &status);
+			/* Print the buffer to the file. */
+			for (y = 0; y < recv_grains[Y_COORD]; ++y)
+				fprintf(fd, "%i %i %i %i %f\n", time, 0, (int)x + offset[X_COORD],
+						(int)y + offset[Y_COORD], recv_buff[y]);
+
+		}
+
+   }
+
+   fflush(fd);
+
+   free(recv_buff);
+}
+
+
 int
-getparams(int argc, char *argv[], pparams *params, FILE **wavefile, 
+getparams(int argc, char *argv[], pparams *params, FILE **gridfile, 
 		FILE **statusfile, MPI_Datatype *pparams_dt, int rank)
 {
 	MPI_Aint pparams_displ[NUM_PARAMS];
@@ -346,7 +419,7 @@ getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
 	params->D = -1;
 	params->l = 0;
 	params->h = 0;
-	*wavefile = NULL;
+	*gridfile = NULL;
 
 	while ((arg = getopt(argc, argv, "x:D:t:f:s:h:l:")) != -1) {
 		switch (arg) {
@@ -360,7 +433,7 @@ getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
 				params->dt = strtof(optarg, NULL);
 				break;
 			case 'f':
-				if ((*wavefile = fopen(optarg, "w")) == NULL) 
+				if ((*gridfile = fopen(optarg, "w")) == NULL) 
 					return EX_CANTCREAT;
 				break;
 			case 's':
@@ -386,7 +459,7 @@ getparams(int argc, char *argv[], pparams *params, FILE **wavefile,
 	params->ttotal = (int)(1 / params->dt);
 
 	/* Do some sanity check. */
-	if (params->ntotal < 1 || params->ntotal < 1 || params->D < 0 || *wavefile
+	if (params->ntotal < 1 || params->ntotal < 1 || params->D < 0 || *gridfile
 			== NULL || params->l == 0 || params->h == 0)
 		usage();
 
@@ -397,7 +470,7 @@ void
 usage(void)
 {
 	fprintf(stderr, "diffusion -D <diffusion> -t <delta t> -x <delta x> \n");
-	fprintf(stderr, "          -f <file> -s <status file> -l <length>   \n");
+	fprintf(stderr, "          -f <file> -s <file> -l <length>   \n");
 	fprintf(stderr, "          -h <height>\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Note that since a two dimensional grid is used the");
