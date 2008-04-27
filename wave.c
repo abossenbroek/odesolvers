@@ -285,8 +285,8 @@ main(int argc, char *argv[])
           * _mm_set_pd(double w, double x) loads w to r0 and x to r1 
           *
           * The computations are the same as in the previous loop. */
-         pde_c_simd_xl = _mm_set_pd(pde_c[j], pde_c[j - 1]);
-         pde_c_simd_xu = _mm_set_pd(pde_c[j + 2], pde_c[j + 1]);
+			pde_c_simd_xl = _mm_loadu_pd(pde_c + j);
+			pde_c_simd_xu = _mm_loadu_pd(pde_c + j + 1);
          /* Load the old values immediately to the new values. */
          pde_n_simd = _mm_set_pd(-pde_o[j + 1], -pde_o[j]);
          tmp_simd = _mm_add_pd(pde_c_simd_xl, pde_c_simd_xu);
