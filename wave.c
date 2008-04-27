@@ -352,7 +352,7 @@ usage(void)
 {
    fprintf(stderr, "string [-l <location> | -p <periods>] -h <height> \n");
    fprintf(stderr, "       -d <delta> -f <freq> -t <time> -n <ntotal>\n");
-   fprintf(stderr, "       -w <file>\n");
+   fprintf(stderr, "       -w <file> -s <file>\n");
    fprintf(stderr, "-l <location> pluck string at location <location>\n");
    fprintf(stderr, "-h <height>   the height of the pluck or sine\n");
    fprintf(stderr, "-p <periods>  set the periods of the sinus on <periods>\n");
