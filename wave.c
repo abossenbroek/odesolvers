@@ -502,7 +502,7 @@ getparams(int argc, char *argv[], solve_params *params, FILE **wavefile,
             params->tau = strtod(optarg, NULL);
             break;
 			case 's':
-            if ((*statusfile = fopen(optarg, "w+")) == NULL) 
+            if ((*statusfile = fopen(optarg, "a")) == NULL) 
                return EX_CANTCREAT;
             break;
          default:
