@@ -108,8 +108,8 @@ int main(int argc, char *argv[])
 
 	grid_type **grid = NULL;
 	grid_type **ngrid = NULL;
-	grid_type *xdown;
-	grid_type *xup;
+	grid_type *xdown = NULL;
+	grid_type *xup = NULL;
 
 	grid_type ratio;
 
