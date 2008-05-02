@@ -60,7 +60,7 @@ void print_wave(FILE *fd, double *pde, int grains, int offset, int time, int
  */
 void send_wave(double *pde, int grains, int offset, int rank,
       MPI_Request *grain_send, MPI_Request *offset_send, MPI_Request
-      *pde_send, MPI_Comm comm);
+      *pde_send, MPI_Comm comm, double *time_comm);
 
 int getparams(int argc, char *argv[], solve_params *params, FILE **wavefile,
 		FILE **satusfile, MPI_Datatype *solve_params_dt, int rank);
@@ -101,6 +101,8 @@ main(int argc, char *argv[])
    double time_end_init = 0;
    double time_end_comm = 0;
    double time_end_comp = 0;
+	double time_start_total = 0;
+	double time_end_total = 0;
 	double time_recv_buf;
 
    /* Define the dimension of the Cartesian grid. As we want to investigate the
@@ -137,7 +139,7 @@ main(int argc, char *argv[])
 
    MPI_Init(&argc, &argv);
    time_start_init = MPI_Wtime();
-
+	time_start_total = MPI_Wtime();
    /* Find the rank of this processors. */
 	MPI_Comm_rank(comm, &rank);
 
@@ -256,17 +258,17 @@ main(int argc, char *argv[])
 				LVAL_COMM, comm, &(neigh_sts[0]));
 		MPI_Recv((void *)&(pde_c[0]), 1, MPI_DOUBLE, rank_lneigh,
 				RVAL_COMM, comm, &(neigh_sts[1]));
-
+      
+		time_end_comm += MPI_Wtime() - time_start_comm;
       /* Send all the wave information to the root. This send is non blocking. */
       if ((time % params.freq) == 0)
          send_wave(pde_c, grains, offset, rank, &grain_snd, &offset_snd,
-               &pde_snd, comm);
+               &pde_snd, comm, &time_end_comm);
 		
 
       /* Ensure that before the actual computation starts all the processes are
        * at this point in the program. */
       MPI_Barrier(comm);
-      time_end_comm += MPI_Wtime() - time_start_comm;
 
       time_start_comp = MPI_Wtime();
 
@@ -279,7 +281,7 @@ main(int argc, char *argv[])
       }
 #else
       size_t j = start;
-      for (i = 0; i < dbl_iter; i++) {
+      for (i = 0; i < dbl_iter; ++i) {
          /* Load all the values from the current pde approximation into the
           * SSE2 registers. 
           * _mm_set_pd(double w, double x) loads w to r0 and x to r1 
@@ -304,12 +306,12 @@ main(int argc, char *argv[])
          j += 2;
       }
 
-      for (i = 0; i < dbl_iter_r; i++)  {
+      for (i = 0; i < dbl_iter_r; ++i)  {
          /* Perform an approximation of the wave equation using finite
           * difference. */
 			pde_n[j] = (2 - 2 * c) * pde_c[j] + c * (pde_c[j - 1] + pde_c[j + 1])
 				- pde_o[j];
-			j++;
+			++j;
       }
 #endif /* NO_SSE2 */
 
@@ -343,8 +345,9 @@ main(int argc, char *argv[])
 			time_end_init += time_recv_buf;
 		}
 		if (statusfile != NULL) {
-			fprintf(statusfile, "%i %lf %lf %lf\n", nnodes, time_end_comp, time_end_init,
-					time_end_comm);
+			time_end_total = MPI_Wtime() - time_start_total;
+			fprintf(statusfile, "%i %lf %lf %lf %lf\n", nnodes, time_end_total,
+					time_end_comp, time_end_init, time_end_comm);
 			fclose(statusfile);
 		}
 		fclose(wavefile);
@@ -379,9 +382,12 @@ usage(void)
 void
 send_wave(double *pde, int grains, int offset, int rank, 
       MPI_Request *grain_send, MPI_Request *offset_send, MPI_Request *pde_send,
-      MPI_Comm comm)
+      MPI_Comm comm, double *time_comm)
 {
+   double time_comm_start;
+
    if (rank != 0) {
+		time_comm_start = MPI_Wtime();
       MPI_Isend((void *)&grains, 1, MPI_INT, 0, GRAIN_COMM, comm,
             grain_send);
       MPI_Isend((void *)&offset, 1, MPI_INT, 0, OFFSET_COMM, comm,
@@ -390,6 +396,7 @@ send_wave(double *pde, int grains, int offset, int rank,
        * boundaries used to compute the stencil. */
       MPI_Isend((void *)(pde + 1), grains, MPI_DOUBLE, 0, 
             PDE_COMM, comm, pde_send);
+		*time_comm += MPI_Wtime() - time_comm_start;
    }
 }
 
