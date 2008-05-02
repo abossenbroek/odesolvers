@@ -1,4 +1,4 @@
-all: wave wavenosse diffusion diffusionnosse
+all: wave diffus diffusdbl diffusdblnosse wavenosse diffusnosse
 
 wavenosse: wavenosse.o
 	mpicc -lm -o wavenosse wavenosse.o
@@ -12,11 +12,11 @@ wave.o: wave.c wave.h
 wavenosse.o : wave.c wave.h
 	mpicc -o wavenosse.o -O3 -std=c99 -Wall -pedantic -msse2 -msse -mtune=prescott -DNO_SSE2 -c wave.c -g
 
-diffusion: diffusion.o 
-	mpicc -lm -o diffusion diffusion.o
+diffus: diffusion.o 
+	mpicc -lm -o diffus diffusion.o
 
-diffusionnosse: diffusionnosse.o 
-	mpicc -lm -o diffusionnosse diffusionnosse.o
+diffusnosse: diffusionnosse.o 
+	mpicc -lm -o diffusnosse diffusionnosse.o
 
 diffusion.o: diffusion.h diffusion.c
 	mpicc -o diffusion.o -std=c99 -Wall -pedantic -c diffusion.c -g
@@ -24,7 +24,19 @@ diffusion.o: diffusion.h diffusion.c
 diffusionnosse.o: diffusion.h diffusion.c
 	mpicc -o diffusionnosse.o -std=c99 -Wall -pedantic -c diffusion.c -DNO_SSE -g
 
+diffusdbl: diffusiondbl.o 
+	mpicc -lm -o diffusdbl diffusiondbl.o
+
+diffusdblnosse: diffusiondblnosse.o 
+	mpicc -lm -o diffusdblnosse diffusiondblnosse.o
+
+diffusiondbl.o: diffusion.h diffusion.c
+	mpicc -o diffusiondbl.o -std=c99 -Wall -pedantic -c diffusion.c -g -DDOUBLE
+
+diffusiondblnosse.o: diffusion.h diffusion.c
+	mpicc -o diffusiondblnosse.o -std=c99 -Wall -pedantic -c diffusion.c -DNO_SSE -g -DDOUBLE
+
 clean:
-	rm -f *o wave wavenosse diffusion diffusionnosse
+	rm -f *o wave wavenosse diffus diffusnosse diffusdbl diffusdblnosse
 
 	

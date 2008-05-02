@@ -23,7 +23,26 @@
 
 #include <mpi.h>
 
+#ifndef NO_SEE
+#	ifdef DOUBLE
+#		include <emmintrin.h>
+#		define MPI_GRID_TYPE MPI_DOUBLE
+#		define SIMD_CAPACITY 2
+typedef double grid_type;
+typedef __m128d grid_simd_type;
+#	else
+#		include "xmmintrin.h"
+#		define MPI_GRID_TYPE MPI_FLOAT
+#		define SIMD_CAPACITY 4
+typedef float grid_type;
+typedef __m128 grid_simd_type;
+#	endif /* DOUBLE */
+#endif /* NO_SSE */
+
+
 #define NUM_PARAMS 8
+
+
 
 typedef struct {
 	float dx;
@@ -38,7 +57,7 @@ typedef struct {
 
 int pparams_blength[NUM_PARAMS] = {1, 1, 1, 1, 1, 1, 1, 1};
 
-MPI_Datatype pparams_type[NUM_PARAMS] = {MPI_FLOAT, MPI_FLOAT, MPI_FLOAT, 
+MPI_Datatype pparams_type[NUM_PARAMS] = {MPI_GRID_TYPE, MPI_GRID_TYPE, MPI_GRID_TYPE, 
 	MPI_INT, MPI_LONG, MPI_INT, MPI_INT, MPI_INT};
 
 enum { X_COORD,
@@ -49,6 +68,9 @@ enum { X_COORD,
 	Y_RIGHT_TAG, 
 	GRAIN_COMM,
 	OFFSET_COMM,
+	TIME_COMP_TAG,
+	TIME_COMM_TAG,
+	TIME_INIT_TAG,
 	GRID_COMM = 1000
 };
 #endif //  _DIFFUSION_H_
