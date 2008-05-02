@@ -274,7 +274,8 @@ main(int argc, char *argv[])
       for (i = start; i < grains + end; i++)  {
          /* Perform an approximation of the wave equation using finite
           * difference. */
-         pde_n[i] = (2 - 2 * c) * pde_c[i] + c * (pde_c[i - 1] + pde_c[i + 1]) - pde_o[i];
+			pde_n[i] = (2 - 2 * c) * pde_c[i] + c * (pde_c[i - 1] + pde_c[i + 1])
+				- pde_o[i];
       }
 #else
       size_t j = start;
@@ -306,7 +307,9 @@ main(int argc, char *argv[])
       for (i = 0; i < dbl_iter_r; i++)  {
          /* Perform an approximation of the wave equation using finite
           * difference. */
-         pde_n[j] = (2 - 2 * c) * pde_c[j] + c * (pde_c[j - 1] + pde_c[j + 1]) - pde_o[j];
+			pde_n[j] = (2 - 2 * c) * pde_c[j] + c * (pde_c[j - 1] + pde_c[j + 1])
+				- pde_o[j];
+			j++;
       }
 #endif /* NO_SSE2 */
 
