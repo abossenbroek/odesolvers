@@ -27,6 +27,7 @@
 #include <err.h>
 #include <unistd.h>
 #include <string.h>
+#include <assert.h>
 
 #include "diffusion.h"
 
@@ -45,6 +46,9 @@ int getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 
 void send_grid(float **grid, size_t *grains, int *offset, int rank, MPI_Comm
 		comm);
+
+void print_grid(FILE *fd, float **grid, size_t *grains, int *offset, int time,
+		int rank, int nnodes, MPI_Comm comm) ;
 
 int main(int argc, char *argv[])
 {
@@ -72,6 +76,9 @@ int main(int argc, char *argv[])
 	MPI_Status xup_status;
 	MPI_Status yleft_status;
 	MPI_Status yright_status;
+
+	size_t yend;
+	size_t ystart;
 	
 #ifndef NO_SSE
 	__m128	sse_ratio;
@@ -82,9 +89,7 @@ int main(int argc, char *argv[])
 	__m128	curru_grid;
 	__m128	currd_grid;
 	__m128	ngrid_sse;
-
-#endif
-
+#endif /* NO_SSE */
 
 	float **grid = NULL;
 	float **ngrid = NULL;
@@ -102,7 +107,8 @@ int main(int argc, char *argv[])
 	size_t i;
 	size_t x, y;
 #ifndef NO_SSE
-	size_t y_remain;
+	size_t y_qdl;
+	size_t y_qdl_r;
 #endif
 	long time;
 
@@ -190,35 +196,54 @@ int main(int argc, char *argv[])
 
 	if ((ratio = params.dt * params.D * 4 / (params.dx * params.dx)) > 1)
 		ratio = 1;
+	else
+		ratio /= 4;
 
 #ifndef NO_SSE
 	sse_ratio = _mm_set_ps1(ratio);
 	/* This variable is used to reduce the number of computations when computing
 	 * the finite difference scheme. */
 	sse_ratio1 = _mm_set_ps1(1.0 - 4.0 * ratio);
-	y_remain = grains[Y_COORD] % 4;
 #endif
 
 	/* All the coordinates are translated to ranks by first computing the
 	 * coordinate of the appropriate neighbours. Then the coordinates are
 	 * used to determine the rank. These ranks can be used for the
 	 * communication. */
-	coord_lneigh[Y_COORD] = (coord[Y_COORD] + gsize[Y_COORD] - 1) % gsize[Y_COORD];
-	coord_rneigh[Y_COORD] = (coord[Y_COORD] + 1) % gsize[Y_COORD];
-	coord_lneigh[X_COORD] = coord[X_COORD];
-	coord_rneigh[X_COORD] = coord[X_COORD];
+	coord_lneigh[X_COORD] = (coord[X_COORD] + gsize[X_COORD] - 1) % gsize[X_COORD];
+	coord_rneigh[X_COORD] = (coord[X_COORD] + 1) % gsize[X_COORD];
+	coord_lneigh[Y_COORD] = coord[Y_COORD];
+	coord_rneigh[Y_COORD] = coord[Y_COORD];
 
-	coord_dneigh[X_COORD] = (coord[X_COORD] + gsize[X_COORD] - 1) % gsize[X_COORD];
-	coord_uneigh[X_COORD] = (coord[X_COORD] + 1) % gsize[X_COORD];
-	coord_dneigh[Y_COORD] = coord[Y_COORD];
-	coord_uneigh[Y_COORD] = coord[Y_COORD];
+	coord_dneigh[Y_COORD] = (coord[Y_COORD] + gsize[Y_COORD] - 1) % gsize[Y_COORD];
+	coord_uneigh[Y_COORD] = (coord[Y_COORD] + 1) % gsize[Y_COORD];
+	coord_dneigh[X_COORD] = coord[X_COORD];
+	coord_uneigh[X_COORD] = coord[X_COORD];
 
 	MPI_Cart_rank(comm, coord_lneigh, &rank_lneigh);
 	MPI_Cart_rank(comm, coord_rneigh, &rank_rneigh);
 	MPI_Cart_rank(comm, coord_dneigh, &rank_dneigh);
 	MPI_Cart_rank(comm, coord_uneigh, &rank_uneigh);
 
+	/* Compute by how much the loop iterators have to be adjusted. */
+	yend = 1;
+	ystart = 1;
+	if (coord[Y_COORD] == (gsize[Y_COORD] - 1)) {
+		yend--;
+		for (x = 1; x < grains[X_COORD] + 1; ++x) 
+			grid[x][grains[Y_COORD]] = 1;
+	} 
+
+	if (coord[Y_COORD] == 0)
+		ystart++;
+			
+#ifndef NO_SSE
+	/* Compute the loop start and end for the SSE instructions. */
+	y_qdl =  (grains[Y_COORD] - ystart + yend) / 4;
+	y_qdl_r = (grains[Y_COORD] - ystart + yend) % 4;
+#endif
 	for (time = 0; time < params.ttotal; time++) {
+
 		/* Create two new arrays to prevent bad memory access. */
 		for (i = 0; i < grains[X_COORD]; i++) {
 			xup[i] = grid[i][grains[Y_COORD]];
@@ -227,38 +252,42 @@ int main(int argc, char *argv[])
 
 		MPI_Send((void *)xup, grains[X_COORD], MPI_FLOAT, rank_uneigh, X_UP_TAG, comm);
 		MPI_Send((void *)xdown, grains[X_COORD], MPI_FLOAT, rank_dneigh, X_DOWN_TAG, comm);
+
+		MPI_Recv((void *)xup, grains[X_COORD], MPI_FLOAT, rank_uneigh, X_UP_TAG,
+				comm, &xup_status);
+
+		MPI_Recv((void *)xdown, grains[X_COORD], MPI_FLOAT, rank_dneigh,
+				X_DOWN_TAG, comm, &xdown_status);
+	
+		/* The freshly received xup and xdown have to be put in the grid. */
+		for (i = 0; i < grains[X_COORD]; i++) {
+			grid[i][grains[Y_COORD] + 1] = xup[i];
+			grid[i][0] = xdown[i];
+		}
+
 		MPI_Send((void *)(grid[grains[X_COORD] + 1] + 1), grains[Y_COORD], MPI_FLOAT,
 				rank_rneigh, Y_RIGHT_TAG, comm);
 		MPI_Send((void *)(grid[1] + 1), grains[Y_COORD], MPI_FLOAT,
 				rank_lneigh, Y_LEFT_TAG, comm);
-
-		MPI_Recv((void *)xup, grains[X_COORD], MPI_FLOAT, rank_dneigh, X_UP_TAG,
-				comm, &xup_status);
-		MPI_Recv((void *)xdown, grains[X_COORD], MPI_FLOAT, rank_uneigh,
-				X_DOWN_TAG, comm, &xdown_status);
-		MPI_Recv((void *)(grid[grains[X_COORD] + 1] + 1), grains[Y_COORD], MPI_FLOAT,
+		MPI_Recv((void *)(grid[0] + 1), grains[Y_COORD], MPI_FLOAT,
 				rank_lneigh, Y_RIGHT_TAG, comm, &yright_status);
-		MPI_Recv((void *)(grid[1] + 1), grains[Y_COORD], MPI_FLOAT,
+		MPI_Recv((void *)(grid[grains[X_COORD] + 1] + 1), grains[Y_COORD], MPI_FLOAT,
 				rank_rneigh, Y_LEFT_TAG, comm, &yleft_status);
-
-		/* The freshly received xup and xdown have to be put in the grid. */
-		for (i = 0; i < grains[X_COORD]; i++) {
-			grid[i][grains[Y_COORD]] = xup[i];
-			grid[i][1] = xdown[i];
-		}
-
-		/* Ensure that all the processes are at the same point. */
-		MPI_Barrier(comm);
+	
+		/* Do a non blocking send of the current grid for printing. */
+		if ((time % params.freq) == 0)
+			send_grid(grid, grains, offset, rank, comm);
+		
 
 		for (x = 1; x < grains[X_COORD] + 1; x++) {
 #ifdef NO_SSE
-			for (y = 1; y < grains[Y_COORD] + 1; y++) {
+			for (y = ystart; y < grains[Y_COORD] + yend; y++) {
 				/* Do the finite difference computation. */
 				ngrid[x][y] = grid[x][y] + ratio * (grid[x][y + 1] + grid[x][y - 1]
 						+ grid[x + 1][y] + grid[x - 1][y] - 4 * grid[x][y]);
 			}
 #else
-			for (y = 1; y < grains[Y_COORD] + 1 - y_remain; y += 4) {
+			for (i = 0, y = ystart; i < y_qdl; ++i, y += 4) {
 				/* Load all the necessary values to  SSE variables. */
 				/* r3 = (x, y + 3)
 				 * r2 = (x, y + 2)
@@ -280,21 +309,30 @@ int main(int argc, char *argv[])
 				currr_grid = _mm_mul_ps(currr_grid, sse_ratio);
 				ngrid_sse = _mm_add_ps(currr_grid, ngrid_sse);
 				_mm_storeu_ps(ngrid[x] + y, ngrid_sse);
-
 			}
 
-			for (; y < grains[Y_COORD] + 1; y++) {
+			for (i = 0; i < y_qdl_r; ++i) {
 				ngrid[x][y] = grid[x][y] + ratio * (grid[x][y + 1] + grid[x][y - 1]
 						+ grid[x + 1][y] + grid[x - 1][y] - 4 * grid[x][y]);
+				y++;
 			}
+
 #endif /* NO_SSE */
 		}
 
-		/* Copy the new grid to the current grid. */
-		for (x = 1; x < grains[X_COORD] + 1; x++) 
-			memcpy((void *)(grid[x] + 1), (void *)(ngrid[x] + 1), grains[Y_COORD]
+		if (time % params.freq == 0)
+			print_grid(profilefile, grid, grains, offset, time, rank, nnodes,
+					comm);
+
+		/* Copy the new grid to the current grid. Use the previously computed
+		 * y-offsets to determine where copying should start. */
+		for (x = 1; x < grains[X_COORD] + 1; ++x) 
+			memcpy((void *)(grid[x] + ystart), (void *)(ngrid[x] + ystart),
+					(grains[Y_COORD] - ystart - yend)
 					* sizeof(float));
-		
+
+		/* Ensure that all the processes are at the same point. */
+		MPI_Barrier(comm);
 	}
 
 	/* Free the memory used for the grid. */
@@ -305,7 +343,7 @@ int main(int argc, char *argv[])
 
 	free(grid);
 	free(ngrid);
-	
+
 	if (rank == 0) {
 		fclose(statusfile);
 		fclose(profilefile);
@@ -322,19 +360,21 @@ send_grid(float **grid, size_t *grains, int *offset, int rank,
 {
 	MPI_Request dummy;
 
+	/* Send all the necessary data using a non blocking send. */
 	if (rank != 0) {
 		MPI_Isend((void *)grains, 2, MPI_INT, 0, GRAIN_COMM, comm, &dummy);
 		MPI_Isend((void *)offset, 2, MPI_INT, 0, OFFSET_COMM, comm, &dummy);
 
-		for (size_t i = 1; i < grains[X_COORD]; i++) 
-			MPI_Isend((void *)(grid + i), grains[Y_COORD], MPI_FLOAT, 0, GRID_COMM +
+		for (size_t i = 1; i < grains[X_COORD] + 1; i++) 
+			MPI_Isend((void *)(grid[i] + 1), grains[Y_COORD], MPI_FLOAT, 0, GRID_COMM +
 					i - 1, comm, &dummy);
 	}
 }
 
 void 
 print_grid(FILE *fd, float **grid, size_t *grains, int *offset, int time, int rank,
-      int nnodes, MPI_Comm comm) {
+		int nnodes, MPI_Comm comm) 
+{
    /* Only rank 0 has to perform this function. */
    if (rank > 0)
       return;
@@ -356,8 +396,10 @@ print_grid(FILE *fd, float **grid, size_t *grains, int *offset, int time, int ra
 
    /* Print all the values computed by the node with rank 0 */
    for (x = 0; x < grains[X_COORD]; ++x) 
-		for (y = 0; y < grains[Y_COORD]; ++y) 
-			fprintf(fd, "%i %i %i %i %f\n", time, 0, (int)x, (int)y, grid[x + 1][y + 1]);
+		for (y = 0; y < grains[Y_COORD]; ++y) {
+			fprintf(fd, "%i %i %i %i %f\n", time, 0, (int)(offset[X_COORD] + x),
+					(int)(offset[Y_COORD] + y), grid[x + 1][y + 1]);
+		}
 
    /* Print all the values computed by the nodes with rank > 0. These 
     * values have to be received from the other nodes. */
@@ -367,13 +409,15 @@ print_grid(FILE *fd, float **grid, size_t *grains, int *offset, int time, int ra
             &status);
       MPI_Recv((void *)recv_offset, 2, MPI_INT, proc, OFFSET_COMM, comm,
             &status);
+		/* Receive all the rows in the grid of the sender. */
 		for (x = 0; x < recv_grains[X_COORD]; ++x) {
 			MPI_Recv((void *)recv_buff, recv_grains[Y_COORD], MPI_FLOAT, proc,
 					GRID_COMM + x, comm, &status);
 			/* Print the buffer to the file. */
 			for (y = 0; y < recv_grains[Y_COORD]; ++y)
-				fprintf(fd, "%i %i %i %i %f\n", time, 0, (int)x + offset[X_COORD],
-						(int)y + offset[Y_COORD], recv_buff[y]);
+				fprintf(fd, "%i %i %i %i %f\n", time, proc, 
+						(int)(x + recv_offset[X_COORD]), 
+						(int)(y + recv_offset[Y_COORD]), recv_buff[y]);
 
 		}
 
@@ -400,6 +444,7 @@ getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 	pparams_displ[4] = (size_t)&(params->ttotal) - (size_t)params;
 	pparams_displ[5] = (size_t)&(params->l) - (size_t)params;
 	pparams_displ[6] = (size_t)&(params->h) - (size_t)params;
+	pparams_displ[7] = (size_t)&(params->freq) - (size_t)params;
 
 	/* Create new MPI datatype. */
 	MPI_Type_create_struct(NUM_PARAMS, 
@@ -419,9 +464,10 @@ getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 	params->D = -1;
 	params->l = 0;
 	params->h = 0;
+	params->freq = -1;
 	*gridfile = NULL;
 
-	while ((arg = getopt(argc, argv, "x:D:t:f:s:h:l:")) != -1) {
+	while ((arg = getopt(argc, argv, "x:D:t:f:s:h:l:g:")) != -1) {
 		switch (arg) {
 			case 'x':
 				params->dx = strtof(optarg, NULL);
@@ -432,7 +478,7 @@ getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 			case 't':
 				params->dt = strtof(optarg, NULL);
 				break;
-			case 'f':
+			case 'g':
 				if ((*gridfile = fopen(optarg, "w")) == NULL) 
 					return EX_CANTCREAT;
 				break;
@@ -445,6 +491,9 @@ getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 				break;
 			case 'h':
 				params->h = (int)strtol(optarg, NULL, 10);
+				break;
+			case 'f':
+				params->freq = (int)strtol(optarg, NULL, 10);
 				break;
 			default:
 				usage();
@@ -459,9 +508,27 @@ getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 	params->ttotal = (int)(1 / params->dt);
 
 	/* Do some sanity check. */
-	if (params->ntotal < 1 || params->ntotal < 1 || params->D < 0 || *gridfile
-			== NULL || params->l == 0 || params->h == 0)
+	if (params->ntotal < 1) {
+		warnx("ntotal > 1");
 		usage();
+	}
+	if (params->D < 0) {
+		warnx("D >= 0");
+		usage();
+	}
+	if (*gridfile == NULL) {
+		warnx("Could not open a file to store grid points.");
+		usage();
+	}
+	if (params->l == 0 || params->h == 0) {
+		warnx("please specify the processor dimensions of the Grid.");
+		usage();
+	}
+	if (params->freq < 0) {
+		warnx("frequency >= 0");
+		usage();
+	}
+
 
 	return EX_OK;
 }
@@ -469,17 +536,18 @@ getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 void
 usage(void)
 {
-	fprintf(stderr, "diffusion -D <diffusion> -t <delta t> -x <delta x> \n");
-	fprintf(stderr, "          -f <file> -s <file> -l <length>   \n");
+	fprintf(stderr, "diffusion -D <diffusion> -t <delta t> -x <delta x>");
+	fprintf(stderr, " -f <file> -s <file> -l <length>\n");
 	fprintf(stderr, "          -h <height>\n");
 	fprintf(stderr, "\n");
-	fprintf(stderr, "Note that since a two dimensional grid is used the");
+	fprintf(stderr, "Note that since a two dimensional grid is used the ");
 	fprintf(stderr, "number of nodes should always be h * l\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "-D <diffusion> the diffusion coefficient\n");
 	fprintf(stderr, "-t <delta t>   the discretization step of the time\n");
 	fprintf(stderr, "-x <delta x>   the discretization of the distance\n");
-	fprintf(stderr, "-f <file>      file where the density profile is stored\n");
+	fprintf(stderr, "-g <file>      file where the density profile is stored\n");
+	fprintf(stderr, "-f <freq>      frequency of density store operations\n");
 	fprintf(stderr, "-s <file>      file where the mpi status is store\n");
 	fprintf(stderr, "-l <l decomp>  length of decomposition\n");
 	fprintf(stderr, "-h <h decomp>  height of decomposition\n");

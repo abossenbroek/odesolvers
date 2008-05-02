@@ -23,7 +23,7 @@
 
 #include <mpi.h>
 
-#define NUM_PARAMS 7
+#define NUM_PARAMS 8
 
 typedef struct {
 	float dx;
@@ -33,12 +33,13 @@ typedef struct {
 	long	 ttotal;
 	int	 l;
 	int	 h;
+	int	 freq;
 } pparams;
 
-int pparams_blength[NUM_PARAMS] = {1, 1, 1, 1, 1, 1, 1};
+int pparams_blength[NUM_PARAMS] = {1, 1, 1, 1, 1, 1, 1, 1};
 
 MPI_Datatype pparams_type[NUM_PARAMS] = {MPI_FLOAT, MPI_FLOAT, MPI_FLOAT, 
-	MPI_INT, MPI_LONG, MPI_INT, MPI_INT};
+	MPI_INT, MPI_LONG, MPI_INT, MPI_INT, MPI_INT};
 
 enum { X_COORD,
 	Y_COORD,
