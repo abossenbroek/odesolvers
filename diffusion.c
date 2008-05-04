@@ -1,6 +1,6 @@
 /* 
  * This program solves the pde for the 2D diffusion equation using MPI-v2 and
- * SSE2.
+ * SSE 1/2.
  *
  * Copyright (C) 2008  Anton Bossenbroek <abossenb@science.uva.nl>
  *
@@ -39,7 +39,7 @@
 #	ifdef DOUBLE
 #		include <emmintrin.h>
 #	else
-#		include "xmmintrin.h"
+#		include <xmmintrin.h>
 #	endif /* DOUBLE */
 #endif /* NO_SSE */
 
@@ -318,10 +318,8 @@ int main(int argc, char *argv[])
 #else
 			for (i = 0, y = ystart; i < y_qdl; ++i, y += SIMD_CAPACITY) {
 #	ifdef DOUBLE
-				/* Load all the necessary values to  SSE variables. */
-				/* r3 = (x, y + 3)
-				 * r2 = (x, y + 2)
-				 * r1 = (x, y + 1)
+				/* Load all the necessary values to  SSE2 variables. */
+				/* r1 = (x, y + 1)
 				 * r0 = (x, y)
 				 */
 				curr_grid = _mm_loadu_pd(grid[x] + y);
@@ -340,7 +338,6 @@ int main(int argc, char *argv[])
 				ngrid_sse = _mm_add_pd(currr_grid, ngrid_sse);
 				_mm_storeu_pd(ngrid[x] + y, ngrid_sse);
 #	else
-	
 				/* Load all the necessary values to  SSE variables. */
 				/* r3 = (x, y + 3)
 				 * r2 = (x, y + 2)
@@ -405,6 +402,7 @@ int main(int argc, char *argv[])
 		MPI_Send(&time_end_init, 1, MPI_DOUBLE, 0, TIME_INIT_TAG, MPI_COMM_WORLD);
 	} 
 
+	/* Get all the information on the running time. */
 	if (rank == 0) {
 		for (i = 1; i < nnodes; ++i) {
 			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_COMM_TAG, MPI_COMM_WORLD, &time_sts);
@@ -418,8 +416,8 @@ int main(int argc, char *argv[])
 		}
 		if (statusfile != NULL) {
 			time_end_total = MPI_Wtime() - time_start_total;
-			fprintf(statusfile, "%i %lf %lf %lf\n", nnodes, time_end_comp, time_end_init,
-					time_end_comm);
+			fprintf(statusfile, "%i %lf %lf %lf %lf\n", nnodes, time_end_total,
+					time_end_comp, time_end_init, time_end_comm);
 			fclose(statusfile);
 		}
 
@@ -507,9 +505,15 @@ print_grid(FILE *fd, grid_type **grid, size_t *grains, int *offset, int time, in
 			*time_comm += MPI_Wtime() - time_comm_start;
 			/* Print the buffer to the file. */
 			for (y = 0; y < recv_grains[Y_COORD]; ++y)
+#ifdef DOULBE
+				fprintf(fd, "%i %i %i %i %lf\n", time, proc, 
+						(int)(x + recv_offset[X_COORD]), 
+						(int)(y + recv_offset[Y_COORD]), recv_buff[y]);
+#else
 				fprintf(fd, "%i %i %i %i %f\n", time, proc, 
 						(int)(x + recv_offset[X_COORD]), 
 						(int)(y + recv_offset[Y_COORD]), recv_buff[y]);
+#endif
 
 		}
 
@@ -629,7 +633,7 @@ void
 usage(void)
 {
 	fprintf(stderr, "diffusion -D <diffusion> -t <delta t> -x <delta x>");
-	fprintf(stderr, " -f <file> -s <file> -l <length>\n");
+	fprintf(stderr, " -g <file> -f <freq> -s <file> -l <length>\n");
 	fprintf(stderr, "          -h <height>\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Note that since a two dimensional grid is used the ");

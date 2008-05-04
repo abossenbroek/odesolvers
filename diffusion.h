@@ -1,6 +1,6 @@
 /* 
  * This program solves the pde for the 2D diffusion equation using MPI-v2 and
- * SSE2.
+ * SSE 1/2.
  *
  * Copyright (C) 2008  Anton Bossenbroek <abossenb@science.uva.nl>
  *
@@ -23,6 +23,8 @@
 
 #include <mpi.h>
 
+/* By defining NO_SSE the user can disable SSE support in the program. By
+ * defining DOUBLE the user can turn on double precision for the grid. */
 #ifndef NO_SEE
 #	ifdef DOUBLE
 #		include <emmintrin.h>
@@ -31,7 +33,7 @@
 typedef double grid_type;
 typedef __m128d grid_simd_type;
 #	else
-#		include "xmmintrin.h"
+#		include <xmmintrin.h>
 #		define MPI_GRID_TYPE MPI_FLOAT
 #		define SIMD_CAPACITY 4
 typedef float grid_type;
@@ -41,8 +43,6 @@ typedef __m128 grid_simd_type;
 
 
 #define NUM_PARAMS 8
-
-
 
 typedef struct {
 	float dx;
@@ -73,7 +73,7 @@ enum { X_COORD,
 	TIME_INIT_TAG,
 	GRID_COMM = 1000
 };
-#endif //  _DIFFUSION_H_
+#endif /* _DIFFUSION_H_ */
 
 /* vim: set spell spelllang=en:cindent:tw=80:et*/
 
