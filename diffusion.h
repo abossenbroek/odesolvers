@@ -41,6 +41,7 @@ typedef __m128 grid_simd_type;
 #	endif /* DOUBLE */
 #endif /* NO_SSE */
 
+#define STEADY_TOLERANCE 1e-3
 
 #define NUM_PARAMS 8
 
@@ -66,12 +67,10 @@ enum { X_COORD,
    X_DOWN_TAG,
 	Y_LEFT_TAG,
 	Y_RIGHT_TAG, 
-	GRAIN_COMM,
-	OFFSET_COMM,
 	TIME_COMP_TAG,
 	TIME_COMM_TAG,
 	TIME_INIT_TAG,
-	GRID_COMM = 1000
+	PRINT_COMM = 1000
 };
 #endif /* _DIFFUSION_H_ */
 

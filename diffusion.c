@@ -28,6 +28,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <assert.h>
+#include <stdbool.h>
 
 #include "diffusion.h"
 
@@ -48,11 +49,14 @@ void usage(void);
 int getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 		FILE **statusfile, MPI_Datatype *solve_params_dt, int rank);
 
-void send_grid(grid_type **grid, size_t *grains, int *offset, int rank, MPI_Comm
-		comm, double *time_comm);
+void send_grid(grid_type **grid, size_t *grains, int *offset, int rank,
+		MPI_Comm comm, double *time_comm, int base_tag);
 
-void print_grid(FILE *fd, grid_type **grid, size_t *grains, int *offset, int time,
-		int rank, int nnodes, MPI_Comm comm, double *time_comm) ;
+void recv_grid(grid_type **grid, size_t *grains, int *offset, int time,
+		int rank, int nnodes, MPI_Comm comm, double *time_comm, int base_tag, 
+		void (*handler)(int, int, int, int, grid_type, void *), void *handlerargs);
+	
+void print_elem(int time, int rank, int x, int y, grid_type elem, void *fd);
 
 int main(int argc, char *argv[])
 {
@@ -104,6 +108,11 @@ int main(int argc, char *argv[])
 	grid_simd_type	curru_grid;
 	grid_simd_type	currd_grid;
 	grid_simd_type	ngrid_sse;
+#	ifdef STEADY
+	grid_simd_type grid_diff;
+	grid_simd_type steady_tol;
+	grid_simd_type ones;
+#	endif /* STEADY */
 #endif /* NO_SSE */
 
 	grid_type **grid = NULL;
@@ -124,8 +133,11 @@ int main(int argc, char *argv[])
 #ifndef NO_SSE
 	size_t y_qdl;
 	size_t y_qdl_r;
-#endif
-	long time;
+#endif /* NO_SSE */
+	long time = 0;
+#ifdef STEADY
+	bool is_steady = false; 
+#endif /* STEADY */
 
 	MPI_Init(&argc, &argv);
    time_start_init = MPI_Wtime();
@@ -222,9 +234,17 @@ int main(int argc, char *argv[])
 	/* This variable is used to reduce the number of computations when computing
 	 * the finite difference scheme. */
 	sse_ratio1 = _mm_set1_pd(1.0 - 4.0 * ratio);
+#		ifdef STEADY
+	ones = _mm_set1_pd(1.0f);
+	steady_tol = _mm_set1_pd(STEADY_TOLERANCE);
+#		endif /* STEADY */
 #	else
 	sse_ratio = _mm_set_ps1(ratio);
 	sse_ratio1 = _mm_set_ps1(1.0 - 4.0 * ratio);
+#		ifdef STEADY
+	ones = _mm_set_ps1(1.0f);
+	steady_tol = _mm_set1_ps(STEADY_TOLERANCE);
+#		endif /* STEADY */
 #	endif /* DOUBLE */
 #endif /* NO_SSE */
 
@@ -266,7 +286,12 @@ int main(int argc, char *argv[])
 #endif /* NO_SSE */
    time_end_init = MPI_Wtime() - time_start_init;
 
-	for (time = 0; time < params.ttotal; time++) {
+#ifdef STEADY
+	for (time = 0; !is_steady || time < params.ttotal; time++)
+#else
+	for (time = 0; time < params.ttotal; time++) 
+#endif /* STEADY */
+	{
 		/* Create two new arrays to prevent bad memory access. */
 		for (i = 0; i < grains[X_COORD]; i++) {
 			xup[i] = grid[i][grains[Y_COORD]];
@@ -303,17 +328,22 @@ int main(int argc, char *argv[])
 		time_end_comm += MPI_Wtime() - time_start_comm;
 	
 		/* Do a non blocking send of the current grid for printing. */
-		if ((time % params.freq) == 0)
-			send_grid(grid, grains, offset, rank, comm, &time_end_comm);
-		
+		if ((time % params.freq) == 0) 
+			send_grid(grid, grains, offset, rank, comm, &time_end_comm, PRINT_COMM);
 
 		time_start_comp = MPI_Wtime();
+#ifdef STEADY
+		is_steady = false;
+#endif
 		for (x = 1; x < grains[X_COORD] + 1; x++) {
 #ifdef NO_SSE
 			for (y = ystart; y < grains[Y_COORD] + yend; y++) {
 				/* Do the finite difference computation. */
 				ngrid[x][y] = grid[x][y] + ratio * (grid[x][y + 1] + grid[x][y - 1]
 						+ grid[x + 1][y] + grid[x - 1][y] - 4 * grid[x][y]);
+#	ifdef STEADY
+				is_steady |= ((ngrid[x][y] - grid[x][y]) < STEADY_TOLERANCE);
+#	endif /* STEADY */
 			}
 #else
 			for (i = 0, y = ystart; i < y_qdl; ++i, y += SIMD_CAPACITY) {
@@ -335,8 +365,15 @@ int main(int argc, char *argv[])
 				ngrid_sse = _mm_mul_pd(curr_grid, sse_ratio1);
 				currr_grid = _mm_add_pd(currr_grid, curru_grid);
 				currr_grid = _mm_mul_pd(currr_grid, sse_ratio);
+#		ifdef STEADY
+				curr_grid = _mm_add_pd(curr_grid, steady_tol);
+#		endif /* STEADY */
 				ngrid_sse = _mm_add_pd(currr_grid, ngrid_sse);
 				_mm_storeu_pd(ngrid[x] + y, ngrid_sse);
+#		ifdef STEADY
+				grid_diff = _mm_cmple_pd(ngrid_sse, curr_grid);
+				status |= _mm_comieq_sd(grid_diff, ones);
+#		endif /* STEADY */
 #	else
 				/* Load all the necessary values to  SSE variables. */
 				/* r3 = (x, y + 3)
@@ -357,31 +394,43 @@ int main(int argc, char *argv[])
 				ngrid_sse = _mm_mul_ps(curr_grid, sse_ratio1);
 				currr_grid = _mm_add_ps(currr_grid, curru_grid);
 				currr_grid = _mm_mul_ps(currr_grid, sse_ratio);
+#		ifdef STEADY
+				curr_grid = _mm_add_ps(curr_grid, steady_tol);
+#		endif /* STEADY */
 				ngrid_sse = _mm_add_ps(currr_grid, ngrid_sse);
 				_mm_storeu_ps(ngrid[x] + y, ngrid_sse);
+#		ifdef STEADY
+				grid_diff = _mm_cmple_ps(ngrid_sse, curr_grid);
+				status |= _mm_comieq_ss(grid_diff, ones);
+#		endif /* STEADY */
 #	endif /* DOUBLE */
 			}
 
 			for (i = 0; i < y_qdl_r; ++i) {
 				ngrid[x][y] = grid[x][y] + ratio * (grid[x][y + 1] + grid[x][y - 1]
 						+ grid[x + 1][y] + grid[x - 1][y] - 4 * grid[x][y]);
+#		ifdef STEADY
+				is_steady |= ((ngrid[x][y] - grid[x][y]) < STEADY_TOLERANCE);
+#		endif /* STEADY */
 				y++;
 			}
-
 #endif /* NO_SSE */
 		}
 		time_end_comp += MPI_Wtime() - time_start_comp;
 
 		if (time % params.freq == 0)
-			print_grid(profilefile, grid, grains, offset, time, rank, nnodes,
-					comm, &time_end_comm);
+			recv_grid(grid, grains, offset, time, rank, nnodes,
+					comm, &time_end_comm, PRINT_COMM, &print_elem,
+					(void *)profilefile);
 
 		/* Copy the new grid to the current grid. Use the previously computed
 		 * y-offsets to determine where copying should start. */
 		for (x = 1; x < grains[X_COORD] + 1; ++x) 
 			memcpy((void *)(grid[x] + ystart), (void *)(ngrid[x] + ystart),
-					(grains[Y_COORD] - ystart - yend)
-					* sizeof(grid_type));
+					(grains[Y_COORD] - ystart - yend) * sizeof(grid_type));
+
+		/* TODO: Broadcast the steady_status */
+
 
 		/* Ensure that all the processes are at the same point. */
 		MPI_Barrier(comm);
@@ -431,7 +480,7 @@ int main(int argc, char *argv[])
 
 void
 send_grid(grid_type **grid, size_t *grains, int *offset, int rank, 
-		MPI_Comm comm, double *time_comm)
+		MPI_Comm comm, double *time_comm, int base_tag)
 {
 	if (rank == 0)
 		return;
@@ -441,20 +490,20 @@ send_grid(grid_type **grid, size_t *grains, int *offset, int rank,
 
 	/* Send all the necessary data using a non blocking send. */
 	time_comm_start = MPI_Wtime();
-	MPI_Isend((void *)grains, 2, MPI_INT, 0, GRAIN_COMM, comm, &dummy);
-	MPI_Isend((void *)offset, 2, MPI_INT, 0, OFFSET_COMM, comm, &dummy);
+	MPI_Isend((void *)grains, 2, MPI_INT, 0, base_tag, comm, &dummy);
+	MPI_Isend((void *)offset, 2, MPI_INT, 0, base_tag + 1, comm, &dummy);
 
 	for (size_t i = 1; i < grains[X_COORD] + 1; i++) 
-		MPI_Isend((void *)(grid[i] + 1), grains[Y_COORD], MPI_GRID_TYPE, 0, GRID_COMM +
-				i - 1, comm, &dummy);
+		MPI_Isend((void *)(grid[i] + 1), grains[Y_COORD], MPI_GRID_TYPE, 0,
+				base_tag + i + 1, comm, &dummy);
 
 	*time_comm += MPI_Wtime() - time_comm_start;
 }
 
 void 
-print_grid(FILE *fd, grid_type **grid, size_t *grains, int *offset, int time, int rank,
-		int nnodes, MPI_Comm comm, double *time_comm) 
-{
+recv_grid(grid_type **grid, size_t *grains, int *offset, int time, int rank,
+		int nnodes, MPI_Comm comm, double *time_comm, int base_tag, 
+		void (*handler)(int, int, int, int, grid_type, void *), void *handlerargs) {
    /* Only rank 0 has to perform this function. */
    if (rank > 0)
       return;
@@ -472,54 +521,36 @@ print_grid(FILE *fd, grid_type **grid, size_t *grains, int *offset, int time, in
    if ((recv_buff = calloc(grains[X_COORD], sizeof(grid_type))) == NULL) {
       MPI_Abort(MPI_COMM_WORLD, EX_OSERR);
    }
-   if (fd == NULL)
-      MPI_Abort(MPI_COMM_WORLD, EX_SOFTWARE);
 
    /* Print all the values computed by the node with rank 0 */
    for (x = 0; x < grains[X_COORD]; ++x) 
-		for (y = 0; y < grains[Y_COORD]; ++y) {
-#ifdef DOULBE
-			fprintf(fd, "%i %i %i %i %lf\n", time, 0, (int)(offset[X_COORD] + x),
-					(int)(offset[Y_COORD] + y), grid[x + 1][y + 1]);
-#else
-			fprintf(fd, "%i %i %i %i %f\n", time, 0, (int)(offset[X_COORD] + x),
-					(int)(offset[Y_COORD] + y), grid[x + 1][y + 1]);
-#endif /* DOUBLE */
-		}
+		for (y = 0; y < grains[Y_COORD]; ++y) 
+			handler(time, 0, (int)(offset[X_COORD] + x), (int)(offset[Y_COORD] +
+						y), grid[x + 1][y + 1], handlerargs);
 
    /* Print all the values computed by the nodes with rank > 0. These 
     * values have to be received from the other nodes. */
    for (int proc = 1; proc < nnodes; proc++) {
       time_comm_start = MPI_Wtime();
       /* Perform blocking receives from the non blocking sends. */
-      MPI_Recv((void *)recv_grains, 2, MPI_INT, proc, GRAIN_COMM, comm,
+      MPI_Recv((void *)recv_grains, 2, MPI_INT, proc, base_tag, comm,
             &status);
-      MPI_Recv((void *)recv_offset, 2, MPI_INT, proc, OFFSET_COMM, comm,
+      MPI_Recv((void *)recv_offset, 2, MPI_INT, proc, base_tag + 1, comm,
             &status);
 		*time_comm += MPI_Wtime() - time_comm_start;
 		/* Receive all the rows in the grid of the sender. */
 		for (x = 0; x < recv_grains[X_COORD]; ++x) {
 			time_comm_start = MPI_Wtime();
 			MPI_Recv((void *)recv_buff, recv_grains[Y_COORD], MPI_GRID_TYPE, proc,
-					GRID_COMM + x, comm, &status);
+					base_tag + x + 2, comm, &status);
 			*time_comm += MPI_Wtime() - time_comm_start;
 			/* Print the buffer to the file. */
 			for (y = 0; y < recv_grains[Y_COORD]; ++y)
-#ifdef DOULBE
-				fprintf(fd, "%i %i %i %i %lf\n", time, proc, 
-						(int)(x + recv_offset[X_COORD]), 
-						(int)(y + recv_offset[Y_COORD]), recv_buff[y]);
-#else
-				fprintf(fd, "%i %i %i %i %f\n", time, proc, 
-						(int)(x + recv_offset[X_COORD]), 
-						(int)(y + recv_offset[Y_COORD]), recv_buff[y]);
-#endif
-
+				handler(time, proc, (int)(offset[X_COORD] + x), (int)(offset[Y_COORD] +
+							y), grid[x + 1][y + 1], handlerargs);
 		}
 
    }
-
-   fflush(fd);
 
    free(recv_buff);
 }
@@ -627,6 +658,17 @@ getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 
 
 	return EX_OK;
+}
+
+void
+print_elem(int time, int rank, int x, int y, grid_type elem, void *fd)
+{
+#ifndef DOUBLE
+			fprintf((FILE *)fd, "%i %i %i %i %f\n", time, 0, x, y, elem);
+#else
+			fprintf((FILE *)fd, "%i %i %i %i %lf\n", time, 0, x, y, elem);
+#endif /* DOUBLE */
+			fflush((FILE *)fd);
 }
 
 void
