@@ -68,6 +68,6 @@ tidiffusdbl.o: tidiffusion.h tidiffusion.c
 
 clean:
 	rm -f *o wave wavenosse diffus diffusnosse diffusdbl diffusdblnosse tidiffus \
-		tidiffusnosse tidiffusdbl tidiffusdblnosse tidiffus tidiffusnosse
+		tidiffusdbl tidiffusdblnosse tidiffusnosse
 
 	
