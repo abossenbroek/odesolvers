@@ -41,8 +41,6 @@ typedef __m128 grid_simd_type;
 #	endif /* DOUBLE */
 #endif /* NO_SSE */
 
-#define STEADY_TOLERANCE 1e-3
-
 #define NUM_PARAMS 8
 
 typedef struct {
@@ -70,7 +68,6 @@ enum { X_COORD,
 	TIME_COMP_TAG,
 	TIME_COMM_TAG,
 	TIME_INIT_TAG,
-	STEADY_TAG,
 	PRINT_COMM = 1000
 };
 #endif /* _DIFFUSION_H_ */

@@ -109,11 +109,6 @@ int main(int argc, char *argv[])
 	grid_simd_type	curru_grid;
 	grid_simd_type	currd_grid;
 	grid_simd_type	ngrid_sse;
-#	ifdef STEADY
-	grid_simd_type grid_diff;
-	grid_simd_type steady_tol;
-	grid_simd_type ones;
-#	endif /* STEADY */
 #endif /* NO_SSE */
 
 	grid_type **grid = NULL;
@@ -136,13 +131,6 @@ int main(int argc, char *argv[])
 	size_t y_qdl_r;
 #endif /* NO_SSE */
 	int time = 0;
-#ifdef STEADY
-	bool is_steady = false; 
-	bool steady_recv = false; 
-	int proc;
-	MPI_Request steady_comm;
-	MPI_Status steady_status;
-#endif /* STEADY */
 
 	MPI_Init(&argc, &argv);
    time_start_init = MPI_Wtime();
@@ -239,17 +227,9 @@ int main(int argc, char *argv[])
 	/* This variable is used to reduce the number of computations when computing
 	 * the finite difference scheme. */
 	sse_ratio1 = _mm_set1_pd(1.0 - 4.0 * ratio);
-#		ifdef STEADY
-	ones = _mm_set1_pd(1.0f);
-	steady_tol = _mm_set1_pd(STEADY_TOLERANCE);
-#		endif /* STEADY */
 #	else
 	sse_ratio = _mm_set_ps1(ratio);
 	sse_ratio1 = _mm_set_ps1(1.0 - 4.0 * ratio);
-#		ifdef STEADY
-	ones = _mm_set_ps1(1.0f);
-	steady_tol = _mm_set1_ps(STEADY_TOLERANCE);
-#		endif /* STEADY */
 #	endif /* DOUBLE */
 #endif /* NO_SSE */
 
@@ -291,11 +271,7 @@ int main(int argc, char *argv[])
 #endif /* NO_SSE */
    time_end_init = MPI_Wtime() - time_start_init;
 
-#ifdef STEADY
-	for (time = 0; !is_steady && time < params.ttotal; time++)
-#else
-	for (time = 0; time < params.ttotal; time++) 
-#endif /* STEADY */
+	for (time = 0; time < params.ttotal; time++)
 	{
 		/* Create two new arrays to prevent bad memory access. */
 		for (i = 0; i < grains[X_COORD]; i++) {
@@ -337,21 +313,12 @@ int main(int argc, char *argv[])
 			send_grid(grid, grains, offset, rank, comm, &time_end_comm, PRINT_COMM);
 
 		time_start_comp = MPI_Wtime();
-#ifdef STEADY
-		is_steady = true;
-#endif
 		for (x = 1; x < grains[X_COORD] + 1; x++) {
 #ifdef NO_SSE
 			for (y = ystart; y < grains[Y_COORD] + yend; y++) {
 				/* Do the finite difference computation. */
 				ngrid[x][y] = grid[x][y] + ratio * (grid[x][y + 1] + grid[x][y - 1]
 						+ grid[x + 1][y] + grid[x - 1][y] - 4 * grid[x][y]);
-#	ifdef STEADY
-				/* TODO for all. */
-				is_steady &= ((ngrid[x][y] - grid[x][y]) < STEADY_TOLERANCE);
-				if (is_steady)
-					warnx("(%i, %i) %i, %i", coord[X_COORD], coord[Y_COORD], x, y);
-#	endif /* STEADY */
 			}
 #else
 			for (i = 0, y = ystart; i < y_qdl; ++i, y += SIMD_CAPACITY) {
@@ -373,15 +340,8 @@ int main(int argc, char *argv[])
 				ngrid_sse = _mm_mul_pd(curr_grid, sse_ratio1);
 				currr_grid = _mm_add_pd(currr_grid, curru_grid);
 				currr_grid = _mm_mul_pd(currr_grid, sse_ratio);
-#		ifdef STEADY
-				curr_grid = _mm_add_pd(curr_grid, steady_tol);
-#		endif /* STEADY */
 				ngrid_sse = _mm_add_pd(currr_grid, ngrid_sse);
 				_mm_storeu_pd(ngrid[x] + y, ngrid_sse);
-#		ifdef STEADY
-				grid_diff = _mm_cmple_pd(ngrid_sse, curr_grid);
-				status |= _mm_comieq_sd(grid_diff, ones);
-#		endif /* STEADY */
 #	else
 				/* Load all the necessary values to  SSE variables. */
 				/* r3 = (x, y + 3)
@@ -402,24 +362,14 @@ int main(int argc, char *argv[])
 				ngrid_sse = _mm_mul_ps(curr_grid, sse_ratio1);
 				currr_grid = _mm_add_ps(currr_grid, curru_grid);
 				currr_grid = _mm_mul_ps(currr_grid, sse_ratio);
-#		ifdef STEADY
-				curr_grid = _mm_add_ps(curr_grid, steady_tol);
-#		endif /* STEADY */
 				ngrid_sse = _mm_add_ps(currr_grid, ngrid_sse);
 				_mm_storeu_ps(ngrid[x] + y, ngrid_sse);
-#		ifdef STEADY
-				grid_diff = _mm_cmple_ps(ngrid_sse, curr_grid);
-				status &= _mm_comieq_ss(grid_diff, ones);
-#		endif /* STEADY */
 #	endif /* DOUBLE */
 			}
 
 			for (i = 0; i < y_qdl_r; ++i) {
 				ngrid[x][y] = grid[x][y] + ratio * (grid[x][y + 1] + grid[x][y - 1]
 						+ grid[x + 1][y] + grid[x - 1][y] - 4 * grid[x][y]);
-#		ifdef STEADY
-				is_steady &= ((ngrid[x][y] - grid[x][y]) < STEADY_TOLERANCE);
-#		endif /* STEADY */
 				y++;
 			}
 #endif /* NO_SSE */
@@ -436,24 +386,6 @@ int main(int argc, char *argv[])
 		for (x = 1; x < grains[X_COORD] + 1; ++x) 
 			memcpy((void *)(grid[x] + ystart), (void *)(ngrid[x] + ystart),
 					(grains[Y_COORD] - ystart - yend) * sizeof(grid_type));
-
-#ifdef STEADY
-		if (time % params.freq == 1) {
-			if (rank != 0) {
-				/* Send details on the steady state of this node to the root node. */
-				MPI_Isend((void *)&is_steady, 1, MPI_CHAR, 0, STEADY_TAG, comm, &steady_comm);
-			} else {
-				/* Receive all the steady status of the nodes and OR this with the
-				 * status on this node. */
-				for (proc = 1; proc < nnodes; proc++) {
-					MPI_Recv((void *)&steady_recv, 1, MPI_CHAR, proc, STEADY_TAG, comm, &steady_status);
-					is_steady &= steady_recv;
-				}
-			}
-			MPI_Bcast((void*)&is_steady, 1, MPI_CHAR, 0, comm);
-		}
-#endif /* STEADY */
-
 
 		/* Ensure that all the processes are at the same point. */
 		MPI_Barrier(comm);
@@ -488,13 +420,8 @@ int main(int argc, char *argv[])
 		}
 		if (statusfile != NULL) {
 			time_end_total = MPI_Wtime() - time_start_total;
-#ifdef STEADY
-			fprintf(statusfile, "%i %lf %lf %lf %lf %i %i\n", nnodes, time_end_total,
-					time_end_comp, time_end_init, time_end_comm, (int)is_steady, time);
-#else
 			fprintf(statusfile, "%i %lf %lf %lf %lf\n", nnodes, time_end_total,
 					time_end_comp, time_end_init, time_end_comm);
-#endif
 			fclose(statusfile);
 		}
 
