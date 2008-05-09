@@ -290,10 +290,6 @@ int main(int argc, char *argv[])
 		MPI_Recv((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh,
 				X_DOWN_TAG, comm, &xup_status);
 
-		//MPI_Send((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh, X_UP_TAG, comm);
-
-		//MPI_Recv((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh, X_DOWN_TAG,
-				//comm, &xup_status);
       time_end_comm += MPI_Wtime() - time_start_comm;
 
 	
