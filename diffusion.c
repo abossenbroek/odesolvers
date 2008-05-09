@@ -216,7 +216,7 @@ int main(int argc, char *argv[])
 			(xup = calloc(grains[X_COORD], sizeof(grid_type))) == NULL)
 		MPI_Abort(comm, EX_OSERR);
 
-	if ((ratio = params.dt * params.D * 4 / (params.dx * params.dx)) > 1)
+	if ((ratio = (params.dt * params.D * 4 / (params.dx * params.dx))) > 1)
 		ratio = 1;
 	else
 		ratio /= 4;
@@ -260,6 +260,8 @@ int main(int argc, char *argv[])
 		for (x = 1; x < grains[X_COORD] + 1; ++x) 
 			grid[x][grains[Y_COORD]] = 1;
 	} 
+	if (grains[Y_COORD] - yend - ystart < 1)
+		MPI_Abort(MPI_COMM_WORLD, EX_USAGE);
 
 	if (coord[Y_COORD] == 0)
 		ystart++;
@@ -275,29 +277,28 @@ int main(int argc, char *argv[])
 	{
 		/* Create two new arrays to prevent bad memory access. */
 		for (i = 0; i < grains[X_COORD]; i++) {
-			xup[i] = grid[i][grains[Y_COORD]];
-			xdown[i] = grid[i][1];
+			xup[i] = grid[i + 1][grains[Y_COORD]];
+			xdown[i] = grid[i + 1][1];
 		}
 
       time_start_comm = MPI_Wtime();
 		MPI_Send((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh, X_UP_TAG, comm);
 		MPI_Send((void *)xdown, grains[X_COORD], MPI_GRID_TYPE, rank_dneigh, X_DOWN_TAG, comm);
 
-		MPI_Recv((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh, X_UP_TAG,
+		MPI_Recv((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh, X_DOWN_TAG,
 				comm, &xup_status);
-
 		MPI_Recv((void *)xdown, grains[X_COORD], MPI_GRID_TYPE, rank_dneigh,
-				X_DOWN_TAG, comm, &xdown_status);
+				X_UP_TAG, comm, &xdown_status);
       time_end_comm += MPI_Wtime() - time_start_comm;
 	
 		/* The freshly received xup and xdown have to be put in the grid. */
 		for (i = 0; i < grains[X_COORD]; i++) {
-			grid[i][grains[Y_COORD] + 1] = xup[i];
-			grid[i][0] = xdown[i];
+			grid[i + 1][grains[Y_COORD] + 1] = xup[i];
+			grid[i + 1][0] = xdown[i];
 		}
 
       time_start_comm = MPI_Wtime();
-		MPI_Send((void *)(grid[grains[X_COORD] + 1] + 1), grains[Y_COORD], MPI_GRID_TYPE,
+		MPI_Send((void *)(grid[grains[X_COORD]] + 1), grains[Y_COORD], MPI_GRID_TYPE,
 				rank_rneigh, Y_RIGHT_TAG, comm);
 		MPI_Send((void *)(grid[1] + 1), grains[Y_COORD], MPI_GRID_TYPE,
 				rank_lneigh, Y_LEFT_TAG, comm);
@@ -309,7 +310,7 @@ int main(int argc, char *argv[])
 		time_end_comm += MPI_Wtime() - time_start_comm;
 	
 		/* Do a non blocking send of the current grid for printing. */
-		if ((time % params.freq) == 1) 
+		if ((time % params.freq) == 0) 
 			send_grid(grid, grains, offset, rank, comm, &time_end_comm, PRINT_COMM);
 
 		time_start_comp = MPI_Wtime();
@@ -376,7 +377,7 @@ int main(int argc, char *argv[])
 		}
 		time_end_comp += MPI_Wtime() - time_start_comp;
 
-		if (time % params.freq == 1)
+		if (time % params.freq == 0)
 			recv_grid(grid, grains, offset, time, rank, nnodes,
 					comm, &time_end_comm, PRINT_COMM, &print_elem,
 					(void *)profilefile);
@@ -399,6 +400,8 @@ int main(int argc, char *argv[])
 
 	free(grid);
 	free(ngrid);
+	free(xup);
+	free(xdown);
 
 	if (rank != 0) {
 		MPI_Send(&time_end_comm, 1, MPI_DOUBLE, 0, TIME_COMM_TAG, MPI_COMM_WORLD);
@@ -458,12 +461,13 @@ send_grid(grid_type **grid, size_t *grains, int *offset, int rank,
 void 
 recv_grid(grid_type **grid, size_t *grains, int *offset, int time, int rank,
 		int nnodes, MPI_Comm comm, double *time_comm, int base_tag, 
-		void (*handler)(int, int, int, size_t*, int*, grid_type*, void *), void *handlerargs) {
+		void (*handler)(int, int, int, size_t*, int*, grid_type*, void *), void *handlerargs) 
+{
    /* Only rank 0 has to perform this function. */
    if (rank > 0)
       return;
 
-	size_t x = 0, y = 0;
+	size_t x = 0;
    grid_type *recv_buff;
    size_t recv_grains[2];
    int recv_offset[2];
@@ -478,10 +482,9 @@ recv_grid(grid_type **grid, size_t *grains, int *offset, int time, int rank,
    }
 
    /* Print all the values computed by the node with rank 0 */
-   for (x = 0; x < grains[X_COORD]; ++x) 
-		for (y = 0; y < grains[Y_COORD]; ++y) 
-			handler(time, 0, (int)(offset[X_COORD] + x), grains, offset,
-						(grid_type *)(grid[x + 1] + 1), handlerargs);
+	for (x = 0; x < grains[X_COORD]; ++x) 
+		handler(time, 0, (int)(offset[X_COORD] + x), grains, offset,
+				(grid_type *)(grid[x + 1] + 1), handlerargs);
 
    /* Print all the values computed by the nodes with rank > 0. These 
     * values have to be received from the other nodes. */
@@ -501,10 +504,8 @@ recv_grid(grid_type **grid, size_t *grains, int *offset, int time, int rank,
 					base_tag + x + 2, comm, &status);
 			*time_comm += MPI_Wtime() - time_comm_start;
 			/* Print the buffer to the file. */
-			for (y = 0; y < recv_grains[Y_COORD]; ++y) {
-				handler(time, proc, (int)(offset[X_COORD] + x), recv_grains, recv_offset,
-						recv_buff, handlerargs);
-			}
+			handler(time, proc, (int)(offset[X_COORD] + x), recv_grains, recv_offset,
+					recv_buff, handlerargs);
 		}
 
    }
