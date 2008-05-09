@@ -22,24 +22,7 @@
 #define _DIFFUSION_H_
 
 #include <mpi.h>
-
-/* By defining NO_SSE the user can disable SSE support in the program. By
- * defining DOUBLE the user can turn on double precision for the grid. */
-#ifndef NO_SEE
-#	ifdef DOUBLE
-#		include <emmintrin.h>
-#		define MPI_GRID_TYPE MPI_DOUBLE
-#		define SIMD_CAPACITY 2
-typedef double grid_type;
-typedef __m128d grid_simd_type;
-#	else
-#		include <xmmintrin.h>
-#		define MPI_GRID_TYPE MPI_FLOAT
-#		define SIMD_CAPACITY 4
-typedef float grid_type;
-typedef __m128 grid_simd_type;
-#	endif /* DOUBLE */
-#endif /* NO_SSE */
+#include "diffusion_help.h"
 
 #define NUM_PARAMS 8
 
@@ -59,17 +42,6 @@ int pparams_blength[NUM_PARAMS] = {1, 1, 1, 1, 1, 1, 1, 1};
 MPI_Datatype pparams_type[NUM_PARAMS] = {MPI_GRID_TYPE, MPI_GRID_TYPE, MPI_GRID_TYPE, 
 	MPI_INT, MPI_LONG, MPI_INT, MPI_INT, MPI_INT};
 
-enum { X_COORD,
-	Y_COORD,
-	X_UP_TAG,
-   X_DOWN_TAG,
-	Y_LEFT_TAG,
-	Y_RIGHT_TAG, 
-	TIME_COMP_TAG,
-	TIME_COMM_TAG,
-	TIME_INIT_TAG,
-	PRINT_COMM = 1000
-};
 #endif /* _DIFFUSION_H_ */
 
 /* vim: set spell spelllang=en:cindent:tw=80:et*/

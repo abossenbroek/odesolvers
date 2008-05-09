@@ -31,6 +31,7 @@
 #include <stdbool.h>
 
 #include "tidiffusion.h"
+#include "diffusion_help.h"
 
 #if MPI_VERSION < 2
 #	error "Need MPI version 2 for this program"
@@ -49,17 +50,8 @@ void usage(void);
 int getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 		FILE **statusfile, MPI_Datatype *solve_params_dt, int rank);
 
-void send_grid(grid_type **grid, size_t *grains, int *offset, int rank,
-		MPI_Comm comm, double *time_comm, int base_tag);
-
-void recv_grid(grid_type **grid, size_t *grains, int *offset, int time,
-		int rank, int nnodes, MPI_Comm comm, double *time_comm, int base_tag, 
-		void (*handler)(int, int, int, size_t*, int*, grid_type*, void *), void *handlerargs);
-	
-void print_elem(int time, int rank, int x, size_t *grains, int *offset, grid_type *column,
-		void *fd);
-
-int main(int argc, char *argv[])
+int 
+main(int argc, char *argv[])
 {
 	MPI_Comm comm = MPI_COMM_WORLD;  /* Communicator. */
 	MPI_Datatype pparams_mpi;		   /* Contains all the parameters. */
@@ -259,6 +251,9 @@ int main(int argc, char *argv[])
 		for (x = 1; x < grains[X_COORD] + 1; ++x) 
 			grid[x][grains[Y_COORD]] = 1;
 	} 
+	
+	if (grains[Y_COORD] - yend - ystart < 1)
+		MPI_Abort(MPI_COMM_WORLD, EX_USAGE);
 
 	if (coord[Y_COORD] == 0)
 		ystart++;
@@ -274,29 +269,29 @@ int main(int argc, char *argv[])
 	{
 		/* Create two new arrays to prevent bad memory access. */
 		for (i = 0; i < grains[X_COORD]; i++) {
-			xup[i] = grid[i][grains[Y_COORD]];
-			xdown[i] = grid[i][1];
+			xup[i] = grid[i + 1][grains[Y_COORD]];
+			xdown[i] = grid[i + 1][1];
 		}
 
-      time_start_comm = MPI_Wtime();
-		MPI_Send((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh, X_UP_TAG, comm);
+     time_start_comm = MPI_Wtime();
 		MPI_Send((void *)xdown, grains[X_COORD], MPI_GRID_TYPE, rank_dneigh, X_DOWN_TAG, comm);
-
-		MPI_Recv((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh, X_UP_TAG,
-				comm, &xup_status);
+		MPI_Send((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh, X_UP_TAG, comm);
 
 		MPI_Recv((void *)xdown, grains[X_COORD], MPI_GRID_TYPE, rank_dneigh,
-				X_DOWN_TAG, comm, &xdown_status);
+				X_UP_TAG, comm, &xdown_status);
+		MPI_Recv((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh,
+				X_DOWN_TAG, comm, &xup_status);
+
       time_end_comm += MPI_Wtime() - time_start_comm;
 	
 		/* The freshly received xup and xdown have to be put in the grid. */
 		for (i = 0; i < grains[X_COORD]; i++) {
-			grid[i][grains[Y_COORD] + 1] = xup[i];
-			grid[i][0] = xdown[i];
+			grid[i + 1][grains[Y_COORD] + 1] = xup[i];
+			grid[i + 1][0] = xdown[i];
 		}
 
       time_start_comm = MPI_Wtime();
-		MPI_Send((void *)(grid[grains[X_COORD] + 1] + 1), grains[Y_COORD], MPI_GRID_TYPE,
+		MPI_Send((void *)(grid[grains[X_COORD]] + 1), grains[Y_COORD], MPI_GRID_TYPE,
 				rank_rneigh, Y_RIGHT_TAG, comm);
 		MPI_Send((void *)(grid[1] + 1), grains[Y_COORD], MPI_GRID_TYPE,
 				rank_lneigh, Y_LEFT_TAG, comm);
@@ -308,24 +303,27 @@ int main(int argc, char *argv[])
 		time_end_comm += MPI_Wtime() - time_start_comm;
 	
 		/* Do a non blocking send of the current grid for printing. */
-		if ((time % params.freq) == 1) 
+		if ((time % params.freq) == 0) 
 			send_grid(grid, grains, offset, rank, comm, &time_end_comm, PRINT_COMM);
 
 		time_start_comp = MPI_Wtime();
-		is_steady = true;
+		is_steady = false;
 		for (x = 1; x < grains[X_COORD] + 1; x++) {
 #ifdef NO_SSE
+			is_steady = true;
 			for (y = ystart; y < grains[Y_COORD] + yend; y++) {
 				/* Do the finite difference computation. */
 				ngrid[x][y] = 0.25 * (grid[x][y + 1] + grid[x][y - 1]
 						+ grid[x + 1][y] + grid[x - 1][y]);
 				
-				/* TODO for all. */
+				/* The test is always done although it is not used during each
+				 * iteration.  This is done to prevent overhead caused by the
+				 * additional test. */
+# ifdef DOUBLE
 				is_steady &= (fabs(ngrid[x][y] - grid[x][y]) < STEADY_TOLERANCE);
-//				if (fabs(ngrid[x][y] - grid[x][y]) > 1e-7)
-					warnx("(%i, %i) %i, %i %lf %lf %.8lf %i", coord[X_COORD], 
-							coord[Y_COORD], x, y, ngrid[x][y], grid[x][y], 
-							fabs(ngrid[x][y] - grid[x][y]), fabs(ngrid[x][y] - grid[x][y]) > 1e-7);
+#	else
+				is_steady &= (fabsf(ngrid[x][y] - grid[x][y]) < STEADY_TOLERANCE);
+#	endif /* DOUBLE */
 			}
 #else
 			for (i = 0, y = ystart; i < y_qdl; ++i, y += SIMD_CAPACITY) {
@@ -351,9 +349,11 @@ int main(int argc, char *argv[])
 				/* new = ratio * right */
 				ngrid_sse = _mm_mul_pd(curru_grid, sse_ratio);
 				grid_diff = _mm_sub_pd(ngrid_sse, grid_diff);
+
+
 				_mm_storeu_pd(ngrid[x] + y, ngrid_sse);
 
-				if (time % params.freq == 1) 
+				if (time % params.freq == 0) 
 					for (j = 0; j < SIMD_CAPACITY; j++)
 						is_steady &= (fabs(((double*)&grid_diff)[j]) <
 								STEADY_TOLERANCE);
@@ -377,10 +377,11 @@ int main(int argc, char *argv[])
 				grid_diff = _mm_sub_ps(ngrid_sse, grid_diff);
 				_mm_storeu_ps(ngrid[x] + y, ngrid_sse);
 				
-				if (time % params.freq == 1) 
-					for (j = 0; j < SIMD_CAPACITY; j++)
+				if (time % params.freq == 0) 
+					for (j = 0; j < SIMD_CAPACITY; j++) {
 						is_steady &= 
 							(fabsf(((float*)&grid_diff)[j]) < STEADY_TOLERANCE);
+					}
 
 #	endif /* DOUBLE */
 			}
@@ -399,7 +400,7 @@ int main(int argc, char *argv[])
 		}
 		time_end_comp += MPI_Wtime() - time_start_comp;
 
-		if (time % params.freq == 1)
+		if (time % params.freq == 0)
 			recv_grid(grid, grains, offset, time, rank, nnodes,
 					comm, &time_end_comm, PRINT_COMM, &print_elem,
 					(void *)profilefile);
@@ -408,17 +409,20 @@ int main(int argc, char *argv[])
 		 * y-offsets to determine where copying should start. */
 		for (x = 1; x < grains[X_COORD] + 1; ++x) 
 			memcpy((void *)(grid[x] + ystart), (void *)(ngrid[x] + ystart),
-					(grains[Y_COORD] - ystart - yend) * sizeof(grid_type));
+					(grains[Y_COORD] - (ystart - yend)) * sizeof(grid_type));
 
-		if (time % params.freq == 1) {
+		if (time % params.freq == 0) {
 			if (rank != 0) {
-				/* Send details on the steady state of this node to the root node. */
-				MPI_Isend((void *)&is_steady, 1, MPI_CHAR, 0, STEADY_TAG, comm, &steady_comm);
+				/* Send details on the steady state of this node to the root node.
+				 */
+				MPI_Isend((void *)&is_steady, 1, MPI_CHAR, 0, STEADY_TAG, comm,
+						&steady_comm);
 			} else {
 				/* Receive all the steady status of the nodes and OR this with the
 				 * status on this node. */
 				for (proc = 1; proc < nnodes; proc++) {
-					MPI_Recv((void *)&steady_recv, 1, MPI_CHAR, proc, STEADY_TAG, comm, &steady_status);
+					MPI_Recv((void *)&steady_recv, 1, MPI_CHAR, proc, STEADY_TAG,
+							comm, &steady_status);
 					is_steady &= steady_recv;
 				}
 			}
@@ -437,6 +441,8 @@ int main(int argc, char *argv[])
 
 	free(grid);
 	free(ngrid);
+	free(xup);
+	free(xdown);
 
 	if (rank != 0) {
 		MPI_Send(&time_end_comm, 1, MPI_DOUBLE, 0, TIME_COMM_TAG, MPI_COMM_WORLD);
@@ -447,19 +453,24 @@ int main(int argc, char *argv[])
 	/* Get all the information on the running time. */
 	if (rank == 0) {
 		for (i = 1; i < nnodes; ++i) {
-			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_COMM_TAG, MPI_COMM_WORLD, &time_sts);
+			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_COMM_TAG,
+					MPI_COMM_WORLD, &time_sts);
 			time_end_comm += time_recv_buf;
 
-			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_COMP_TAG, MPI_COMM_WORLD, &time_sts);
+			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_COMP_TAG,
+					MPI_COMM_WORLD, &time_sts);
 			time_end_comp += time_recv_buf;
 
-			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_INIT_TAG, MPI_COMM_WORLD, &time_sts);
+			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_INIT_TAG,
+					MPI_COMM_WORLD, &time_sts);
 			time_end_init += time_recv_buf;
 		}
 		if (statusfile != NULL) {
 			time_end_total = MPI_Wtime() - time_start_total;
-			fprintf(statusfile, "%i %lf %lf %lf %lf %i %i\n", nnodes, time_end_total,
-					time_end_comp, time_end_init, time_end_comm, (int)is_steady, time);
+			fprintf(statusfile, "%i %i %i %i %lf %lf %lf %lf %i %li\n", nnodes,
+					gsize[X_COORD], gsize[Y_COORD], sizeof(grid_type),
+					time_end_total, time_end_comp,
+					time_end_init, time_end_comm, (int)is_steady, time);
 			fclose(statusfile);
 		}
 
@@ -471,86 +482,6 @@ int main(int argc, char *argv[])
 	return EX_OK;
 }
 
-void
-send_grid(grid_type **grid, size_t *grains, int *offset, int rank, 
-		MPI_Comm comm, double *time_comm, int base_tag)
-{
-	if (rank == 0)
-		return;
-
-	MPI_Request dummy;
-	double time_comm_start;
-
-	/* Send all the necessary data using a non blocking send. */
-	time_comm_start = MPI_Wtime();
-	MPI_Isend((void *)grains, 2, MPI_INT, 0, base_tag, comm, &dummy);
-	MPI_Isend((void *)offset, 2, MPI_INT, 0, base_tag + 1, comm, &dummy);
-
-	for (size_t i = 1; i < grains[X_COORD] + 1; i++) 
-		MPI_Isend((void *)(grid[i] + 1), grains[Y_COORD], MPI_GRID_TYPE, 0,
-				base_tag + i + 1, comm, &dummy);
-
-	*time_comm += MPI_Wtime() - time_comm_start;
-}
-
-void 
-recv_grid(grid_type **grid, size_t *grains, int *offset, int time, int rank,
-		int nnodes, MPI_Comm comm, double *time_comm, int base_tag, 
-		void (*handler)(int, int, int, size_t*, int*, grid_type*, void *), void *handlerargs) {
-   /* Only rank 0 has to perform this function. */
-   if (rank > 0)
-      return;
-
-	size_t x = 0, y = 0;
-   grid_type *recv_buff;
-   size_t recv_grains[2];
-   int recv_offset[2];
-   MPI_Status status;
-   double time_comm_start;
-
-   /* When load balancing the node with rank 0 will always have the largest
-    * amount of grains to compute. Therefore the number of grains which are
-    * to be computed by the root can also be used as buffer size. */
-   if ((recv_buff = calloc(grains[X_COORD], sizeof(grid_type))) == NULL) {
-      MPI_Abort(MPI_COMM_WORLD, EX_OSERR);
-   }
-
-   /* Print all the values computed by the node with rank 0 */
-   for (x = 0; x < grains[X_COORD]; ++x) 
-		for (y = 0; y < grains[Y_COORD]; ++y) 
-			handler(time, 0, (int)(offset[X_COORD] + x), grains, offset,
-						(grid_type *)(grid[x + 1] + 1), handlerargs);
-
-   /* Print all the values computed by the nodes with rank > 0. These 
-    * values have to be received from the other nodes. */
-   for (int proc = 1; proc < nnodes; proc++) {
-      time_comm_start = MPI_Wtime();
-      /* Perform blocking receives from the non blocking sends. */
-      MPI_Recv((void *)recv_grains, 2, MPI_INT, proc, base_tag, comm,
-            &status);
-
-      MPI_Recv((void *)recv_offset, 2, MPI_INT, proc, base_tag + 1, comm,
-            &status);
-		*time_comm += MPI_Wtime() - time_comm_start;
-		/* Receive all the rows in the grid of the sender. */
-		for (x = 0; x < recv_grains[X_COORD]; ++x) {
-			time_comm_start = MPI_Wtime();
-			MPI_Recv((void *)recv_buff, recv_grains[Y_COORD], MPI_GRID_TYPE, proc,
-					base_tag + x + 2, comm, &status);
-			*time_comm += MPI_Wtime() - time_comm_start;
-			/* Print the buffer to the file. */
-			for (y = 0; y < recv_grains[Y_COORD]; ++y) {
-				handler(time, proc, (int)(offset[X_COORD] + x), recv_grains, recv_offset,
-						recv_buff, handlerargs);
-			}
-		}
-
-   }
-
-   free(recv_buff);
-}
-
-
 int
 getparams(int argc, char *argv[], pparams *params, FILE **gridfile, 
 		FILE **statusfile, MPI_Datatype *pparams_dt, int rank)
@@ -561,12 +492,11 @@ getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 	/* Compute the displacements necessary to create a new MPI datatype. */
 	pparams_displ[0] = (size_t)&(params->dx) - (size_t)params;
 	pparams_displ[1] = (size_t)&(params->dt) - (size_t)params;
-	pparams_displ[2] = (size_t)&(params->D) - (size_t)params;
-	pparams_displ[3] = (size_t)&(params->ntotal) - (size_t)params;
-	pparams_displ[4] = (size_t)&(params->ttotal) - (size_t)params;
-	pparams_displ[5] = (size_t)&(params->l) - (size_t)params;
-	pparams_displ[6] = (size_t)&(params->h) - (size_t)params;
-	pparams_displ[7] = (size_t)&(params->freq) - (size_t)params;
+	pparams_displ[2] = (size_t)&(params->ntotal) - (size_t)params;
+	pparams_displ[3] = (size_t)&(params->ttotal) - (size_t)params;
+	pparams_displ[4] = (size_t)&(params->l) - (size_t)params;
+	pparams_displ[5] = (size_t)&(params->h) - (size_t)params;
+	pparams_displ[6] = (size_t)&(params->freq) - (size_t)params;
 
 	/* Create new MPI datatype. */
 	MPI_Type_create_struct(NUM_PARAMS, 
@@ -583,19 +513,15 @@ getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 
 	params->dx = -1;
 	params->dt = -1;
-	params->D = -1;
 	params->l = 0;
 	params->h = 0;
 	params->freq = -1;
 	*gridfile = NULL;
 
-	while ((arg = getopt(argc, argv, "x:D:t:f:s:h:l:g:")) != -1) {
+	while ((arg = getopt(argc, argv, "x:t:f:s:h:l:g:")) != -1) {
 		switch (arg) {
 			case 'x':
 				params->dx = (grid_type)strtof(optarg, NULL);
-				break;
-			case 'D':
-				params->D = (grid_type)strtof(optarg, NULL);
 				break;
 			case 't':
 				params->dt = (grid_type)strtof(optarg, NULL);
@@ -605,7 +531,7 @@ getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 					return EX_CANTCREAT;
 				break;
 			case 's':
-				if ((*statusfile = fopen(optarg, "w+")) == NULL) 
+				if ((*statusfile = fopen(optarg, "a+")) == NULL) 
 					return EX_CANTCREAT;
 				break;
 			case 'l':
@@ -634,10 +560,6 @@ getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 		warnx("ntotal > 1");
 		usage();
 	}
-	if (params->D < 0) {
-		warnx("D >= 0");
-		usage();
-	}
 	if (*gridfile == NULL) {
 		warnx("Could not open a file to store grid points.");
 		usage();
@@ -655,33 +577,18 @@ getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 	return EX_OK;
 }
 
-void
-print_elem(int time, int rank, int x, size_t* grains, int* offset, 
-		grid_type *column, void *fd)
-{
-	size_t y = 0;
-	
-	for (y = 0; y < grains[Y_COORD]; ++y) {
-#ifndef DOUBLE
-		fprintf((FILE *)fd, "%i %i %i %i %f\n", time, rank, x, ((int)y + offset[Y_COORD]), column[y]);
-#else
-		fprintf((FILE *)fd, "%i %i %i %i %lf\n", time, rank, x, ((int)y + offset[Y_COORD]), column[y]);
-#endif /* DOUBLE */
-	}
-	fflush((FILE *)fd);
-}
+
 
 void
 usage(void)
 {
-	fprintf(stderr, "diffusion -D <diffusion> -t <delta t> -x <delta x>");
+	fprintf(stderr, "tidiffusion -t <delta t> -x <delta x>");
 	fprintf(stderr, " -g <file> -f <freq> -s <file> -l <length>\n");
 	fprintf(stderr, "          -h <height>\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Note that since a two dimensional grid is used the ");
 	fprintf(stderr, "number of nodes should always be h * l\n");
 	fprintf(stderr, "\n");
-	fprintf(stderr, "-D <diffusion> the diffusion coefficient\n");
 	fprintf(stderr, "-t <delta t>   the discretization step of the time\n");
 	fprintf(stderr, "-x <delta x>   the discretization of the distance\n");
 	fprintf(stderr, "-g <file>      file where the density profile is stored\n");

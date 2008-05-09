@@ -1,3 +1,11 @@
+diffusion_files=diffusion.c diffusion.h 
+diffusion_help_files=diffusion_help.h diffusion_help.c
+tidiffusion_files= tidiffusion.h tidiffusion.c
+OPTFLAGS=-O3 -msse -msse2 -mtune=prescott
+CFLAGS=-std=c99 -Wall -pedantic
+LDFLAGS=-lm
+
+
 all: allwave alldiffusion alltidiffusion
 
 alldiffusion: diffus diffusdbl diffusdblnosse diffusnosse
@@ -18,56 +26,69 @@ wave.o: wave.c wave.h
 wavenosse.o : wave.c wave.h
 	mpicc -o wavenosse.o -O3 -std=c99 -Wall -pedantic -msse2 -msse -mtune=prescott -DNO_SSE2 -c wave.c -g
 
-diffus: diffusion.o 
-	mpicc -lm -o diffus diffusion.o
+diffus: diffusion.o diffusion_help.o
+	mpicc $(LDFLAGS) -o diffus diffusion.o diffusion_help.o
 
-diffusnosse: diffusionnosse.o 
-	mpicc -lm -o diffusnosse diffusionnosse.o
+diffusnosse: diffusionnosse.o diffusion_helpnosse.o
+	mpicc $(LDFLAGS) -o diffusnosse diffusionnosse.o diffusion_helpnosse.o
 
-diffusion.o: diffusion.h diffusion.c
-	mpicc -o diffusion.o -std=c99 -Wall -pedantic -c diffusion.c -g -O3 -mtune=prescott -msse
+diffusion.o: $(diffusion_files) $(diffusion_help_files)
+	mpicc -o diffusion.o -c diffusion.c $(CLFAGS) $(OPTFLAGS)
 
-diffusionnosse.o: diffusion.h diffusion.c
-	mpicc -o diffusionnosse.o -std=c99 -Wall -pedantic -c diffusion.c -DNO_SSE -g -O3 -mtune=prescott
+diffusdbl: diffusiondbl.o diffusion_helpdbl.o
+	mpicc $(LDFLAGS) -o diffusdbl diffusiondbl.o diffusion_helpdbl.o
 
-diffusdbl: diffusiondbl.o 
-	mpicc -lm -o diffusdbl diffusiondbl.o
+diffusdblnosse: diffusiondblnosse.o diffusion_helpdblnosse.o
+	mpicc $(LDFLAGS) -o diffusdblnosse diffusiondblnosse.o diffusion_helpdblnosse.o
 
-diffusdblnosse: diffusiondblnosse.o 
-	mpicc -lm -o diffusdblnosse diffusiondblnosse.o
+diffusionnosse.o: $(diffusion_files) $(diffusion_help_files)
+	mpicc -o diffusionnosse.o -c diffusion.c $(CLFAGS) $(OPTFLAGS) -DNO_SSE -DDOUBLE
 
-diffusiondbl.o: diffusion.h diffusion.c
-	mpicc -o diffusiondbl.o -std=c99 -Wall -pedantic -c diffusion.c -g -DDOUBLE -O3 -mtune=prescott -msse -msse2
+diffusiondbl.o: $(diffusion_files) $(diffusion_help_files)
+	mpicc -o diffusiondbl.o -c diffusion.c $(CLFAGS) $(OPTFLAGS) -DDOUBLE
 
-diffusiondblnosse.o: diffusion.h diffusion.c
-	mpicc -o diffusiondblnosse.o -std=c99 -Wall -pedantic -c diffusion.c -DNO_SSE -g -DDOUBLE -O3 -mtune=prescott
+diffusiondblnosse.o: $(diffusion_files) $(diffusion_help_files)
+	mpicc -o diffusiondblnosse.o -c diffusion.c $(CLFAGS) $(OPTFLAGS) -DDOUBLE -DNO_SSE
 
-tidiffusnosse: tidiffusnosse.o 
-	mpicc -lm -o tidiffusnosse tidiffusnosse.o
+diffusion_help.o: $(diffusion_help_files)
+	mpicc -o diffusion_help.o -c diffusion_help.c $(OPTFLAGS)
 
-tidiffusnosse.o: tidiffusion.h tidiffusion.c
-	mpicc -o tidiffusnosse.o -std=c99 -Wall -pedantic -c tidiffusion.c -g -DSTEADY -O3 -mtune=prescott -msse -msse2 -DNO_SSE
+diffusion_helpdbl.o: $(diffusion_help_files)
+	mpicc -o diffusion_helpdbl.o -c diffusion_help.c $(OPTFLAGS) -DDOUBLE
 
-tidiffus: tidiffus.o 
-	mpicc -lm -o tidiffus tidiffus.o
+diffusion_helpnosse.o: $(diffusion_help_files)
+	mpicc -o diffusion_helpnosse.o -c diffusion_help.c $(OPTFLAGS) -DNO_SSE
 
-tidiffus.o: tidiffusion.h tidiffusion.c
-	mpicc -o tidiffus.o -std=c99 -Wall -pedantic -c tidiffusion.c -g -DSTEADY -O3 -mtune=prescott -msse -msse2 
+diffusion_helpdblnosse.o: $(diffusion_help_files)
+	mpicc -o diffusion_helpdblnosse.o -c diffusion_help.c $(OPTFLAGS) -DDOUBLE -DNO_SSE
 
-tidiffusdblnosse: tidiffusdblnosse.o 
-	mpicc -lm -o tidiffusdblnosse tidiffusdblnosse.o
+tidiffus: tidiffusion.o diffusion_help.o
+	mpicc $(LDFLAGS) -o tidiffus tidiffusion.o diffusion_help.o
 
-tidiffusdblnosse.o: tidiffusion.h tidiffusion.c
-	mpicc -o tidiffusdblnosse.o -std=c99 -Wall -pedantic -c tidiffusion.c -g -DSTEADY -O3 -mtune=prescott -msse -msse2 -DNO_SSE -DDOUBLE
+tidiffusnosse: tidiffusionnosse.o diffusion_helpnosse.o
+	mpicc $(LDFLAGS) -o tidiffusnosse tidiffusionnosse.o diffusion_helpnosse.o
 
-tidiffusdbl: tidiffusdbl.o 
-	mpicc -lm -o tidiffusdbl tidiffusdbl.o
+tidiffusion.o: $(tidiffusion_files) $(diffusion_help_files)
+	mpicc -o tidiffusion.o -c tidiffusion.c $(CLFAGS) $(OPTFLAGS)
 
-tidiffusdbl.o: tidiffusion.h tidiffusion.c
-	mpicc -o tidiffusdbl.o -std=c99 -Wall -pedantic -c tidiffusion.c -g -DSTEADY -O3 -mtune=prescott -msse -msse2  -DDOUBLE
+tidiffusdbl: tidiffusiondbl.o diffusion_helpdbl.o
+	mpicc $(LDFLAGS) -o tidiffusdbl tidiffusiondbl.o diffusion_helpdbl.o
+
+tidiffusdblnosse: tidiffusiondblnosse.o diffusion_helpdblnosse.o
+	mpicc $(LDFLAGS) -o tidiffusdblnosse tidiffusiondblnosse.o diffusion_helpdblnosse.o
+
+tidiffusionnosse.o: $(tidiffusion_files) $(diffusion_help_files)
+	mpicc -o tidiffusionnosse.o -c tidiffusion.c $(CLFAGS) $(OPTFLAGS) -DNO_SSE -DDOUBLE
+
+tidiffusiondbl.o: $(tidiffusion_files) $(diffusion_help_files)
+	mpicc -o tidiffusiondbl.o -c tidiffusion.c $(CLFAGS) $(OPTFLAGS) -DDOUBLE
+
+tidiffusiondblnosse.o: $(tidiffusion_files) $(diffusion_help_files)
+	mpicc -o tidiffusiondblnosse.o -c tidiffusion.c $(CLFAGS) $(OPTFLAGS) -DDOUBLE -DNO_SSE
+
+
 
 clean:
 	rm -f *o wave wavenosse diffus diffusnosse diffusdbl diffusdblnosse tidiffus \
 		tidiffusdbl tidiffusdblnosse tidiffusnosse
-
 	
