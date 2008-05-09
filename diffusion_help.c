@@ -64,7 +64,7 @@ recv_grid(grid_type **grid, size_t *grains, int *offset, int time, int rank,
    /* When load balancing the node with rank 0 will always have the largest
     * amount of grains to compute. Therefore the number of grains which are
     * to be computed by the root can also be used as buffer size. */
-   if ((recv_buff = calloc(grains[X_COORD], sizeof(grid_type))) == NULL) {
+   if ((recv_buff = calloc(grains[Y_COORD], sizeof(grid_type))) == NULL) {
       MPI_Abort(MPI_COMM_WORLD, EX_OSERR);
    }
 
