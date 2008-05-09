@@ -282,14 +282,20 @@ int main(int argc, char *argv[])
 		}
 
       time_start_comm = MPI_Wtime();
-		MPI_Send((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh, X_UP_TAG, comm);
 		MPI_Send((void *)xdown, grains[X_COORD], MPI_GRID_TYPE, rank_dneigh, X_DOWN_TAG, comm);
+		MPI_Send((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh, X_UP_TAG, comm);
 
-		MPI_Recv((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh, X_DOWN_TAG,
-				comm, &xup_status);
 		MPI_Recv((void *)xdown, grains[X_COORD], MPI_GRID_TYPE, rank_dneigh,
 				X_UP_TAG, comm, &xdown_status);
+		MPI_Recv((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh,
+				X_DOWN_TAG, comm, &xup_status);
+
+		//MPI_Send((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh, X_UP_TAG, comm);
+
+		//MPI_Recv((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh, X_DOWN_TAG,
+				//comm, &xup_status);
       time_end_comm += MPI_Wtime() - time_start_comm;
+
 	
 		/* The freshly received xup and xdown have to be put in the grid. */
 		for (i = 0; i < grains[X_COORD]; i++) {
@@ -384,9 +390,9 @@ int main(int argc, char *argv[])
 
 		/* Copy the new grid to the current grid. Use the previously computed
 		 * y-offsets to determine where copying should start. */
-		for (x = 1; x < grains[X_COORD] + 1; ++x) 
+		for (x = 0; x < grains[X_COORD] + 2; ++x) 
 			memcpy((void *)(grid[x] + ystart), (void *)(ngrid[x] + ystart),
-					(grains[Y_COORD] - ystart - yend) * sizeof(grid_type));
+					(grains[Y_COORD] - (ystart - yend)) * sizeof(grid_type));
 
 		/* Ensure that all the processes are at the same point. */
 		MPI_Barrier(comm);

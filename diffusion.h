@@ -44,9 +44,9 @@ typedef __m128 grid_simd_type;
 #define NUM_PARAMS 8
 
 typedef struct {
-	float dx;
-	float dt;
-	float D;
+	grid_type dx;
+	grid_type dt;
+	grid_type D;
 	int	 ntotal;
 	long	 ttotal;
 	int	 l;
