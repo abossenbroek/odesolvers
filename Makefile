@@ -1,10 +1,10 @@
 diffusion_files=diffusion.c diffusion.h 
 diffusion_help_files=diffusion_help.h diffusion_help.c
 tidiffusion_files= tidiffusion.h tidiffusion.c
-OPTFLAGS=-msse -msse2 -mtune=prescott
-CFLAGS=-std=gnu9x -Wall -pedantic -g
+# -ffast-math really makes a difference!
+OPTFLAGS=-msse -msse2 -mtune=pentium4 -O3 -falign-loops -fmove-loop-invariants -ffast-math -fno-trapping-math 
+CFLAGS=-std=gnu9x -Wall -pedantic -g -Wextra 
 LDFLAGS=-lm
-
 
 all: allwave alldiffusion alltidiffusion
 
