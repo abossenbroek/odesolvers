@@ -26,6 +26,10 @@
 
 #define NUM_PARAMS 8
 
+#ifndef __FAST_MATH__
+#	warning enabling -ffast-math can really speed things up!
+#endif
+
 typedef struct {
 	grid_type dx;
 	grid_type dt;
