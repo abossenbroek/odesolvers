@@ -50,7 +50,8 @@ void usage(void);
 int getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 		FILE **statusfile, MPI_Datatype *solve_params_dt, int rank);
 
-int main(int argc, char *argv[])
+int 
+main(int argc, char *argv[])
 {
 	MPI_Comm comm = MPI_COMM_WORLD;  /* Communicator. */
 	MPI_Datatype pparams_mpi;		   /* Contains all the parameters. */
@@ -79,18 +80,18 @@ int main(int argc, char *argv[])
 	MPI_Status yright_status;
 
 	double time_start_comm = 0;
-   double time_start_comp = 0;
-   double time_start_init = 0;
-   double time_end_init = 0;
-   double time_end_comm = 0;
-   double time_end_comp = 0;
+	double time_start_comp = 0;
+	double time_start_init = 0;
+	double time_end_init = 0;
+	double time_end_comm = 0;
+	double time_end_comp = 0;
 	double time_start_total = 0;
 	double time_end_total = 0;
 	double time_recv_buf;
 
 	size_t yend;
 	size_t ystart;
-	
+
 #ifndef NO_SSE
 	grid_simd_type	sse_ratio;
 	grid_simd_type	sse_ratio1;
@@ -108,6 +109,7 @@ int main(int argc, char *argv[])
 	grid_type *xup = NULL;
 
 	grid_type ratio;
+	grid_type ratio1;
 
 	/* Arguments. */
 	pparams params;
@@ -124,9 +126,9 @@ int main(int argc, char *argv[])
 	long time = 0;
 
 	MPI_Init(&argc, &argv);
-   time_start_init = MPI_Wtime();
+	time_start_init = MPI_Wtime();
 	time_start_total = MPI_Wtime();
-   MPI_Comm_rank(comm, &rank);
+	MPI_Comm_rank(comm, &rank);
 	/* Parse the parameters. The function only parses parameters if this
 	 * processor has rank zero. */
 	if ((status = getparams(argc, argv, &params, &profilefile, &statusfile,
@@ -163,7 +165,7 @@ int main(int argc, char *argv[])
 
 
 	/* Using the coordinate of the current node we can determine the amount of
-    * points this node has to compute and the offset of the points. */
+	 * points this node has to compute and the offset of the points. */
 	for (i = 0; i < dims; i++) {
 		grains[i] = params.ntotal / gsize[i] + (params.ntotal % gsize[i] +
 				gsize[i] - coord[i] - 1) / gsize[i];
@@ -173,7 +175,7 @@ int main(int argc, char *argv[])
 		else
 			offset[i] = params.ntotal / gsize[i] * coord[i] + params.ntotal % gsize[i];
 	}
-	
+
 	/* With the current dimensions arrays which represent the grid can be
 	 * allocated. Two more entries are used to store neighbouring points. 
 	 *
@@ -207,11 +209,13 @@ int main(int argc, char *argv[])
 			(xup = calloc(grains[X_COORD], sizeof(grid_type))) == NULL)
 		MPI_Abort(comm, EX_OSERR);
 
-	if ((ratio = (params.dt * params.D * 4 / (params.dx * params.dx))) > 1)
+	if ((params.dt * params.D * 4 / (params.dx * params.dx)) > 1)
 		ratio = 1;
 	else
-		ratio /= 4;
+		ratio = params.dt * params.D / (params.dx * params.dx);
 
+	ratio = 1.0 / 4.0;
+	ratio1 = 1.0 - 4.0 * ratio;
 #ifndef NO_SSE
 #	ifdef DOUBLE
 	sse_ratio = _mm_set1_pd(ratio);
@@ -243,6 +247,8 @@ int main(int argc, char *argv[])
 	MPI_Cart_rank(comm, coord_dneigh, &rank_dneigh);
 	MPI_Cart_rank(comm, coord_uneigh, &rank_uneigh);
 
+
+
 	/* Compute by how much the loop iterators have to be adjusted. */
 	yend = 1;
 	ystart = 1;
@@ -257,13 +263,17 @@ int main(int argc, char *argv[])
 
 	if (coord[Y_COORD] == 0)
 		ystart++;
-			
+
 #ifndef NO_SSE
-/* Compute the loop start and end for the SSE instructions. */
+	/* Compute the loop start and end for the SSE instructions. */
 	y_qdl =  (grains[Y_COORD] - ystart + yend) / SIMD_CAPACITY;
 	y_qdl_r = (grains[Y_COORD] - ystart + yend) % SIMD_CAPACITY;
 #endif /* NO_SSE */
-   time_end_init = MPI_Wtime() - time_start_init;
+	time_end_init = MPI_Wtime() - time_start_init;
+
+	send_grid(grid, grains, offset, rank, comm, &time_end_comm, PRINT_COMM);
+	recv_grid(grid, grains, offset, -1, rank, nnodes, comm, &time_end_comm,
+			PRINT_COMM, &print_elem, (void *)profilefile);
 
 	for (time = 0; time < params.ttotal; time++)
 	{
@@ -273,7 +283,7 @@ int main(int argc, char *argv[])
 			xdown[i] = grid[i + 1][1];
 		}
 
-      time_start_comm = MPI_Wtime();
+		time_start_comm = MPI_Wtime();
 		MPI_Send((void *)xdown, grains[X_COORD], MPI_GRID_TYPE, rank_dneigh, X_DOWN_TAG, comm);
 		MPI_Send((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh, X_UP_TAG, comm);
 
@@ -282,15 +292,16 @@ int main(int argc, char *argv[])
 		MPI_Recv((void *)xup, grains[X_COORD], MPI_GRID_TYPE, rank_uneigh,
 				X_DOWN_TAG, comm, &xup_status);
 
-      time_end_comm += MPI_Wtime() - time_start_comm;
-	
+		time_end_comm += MPI_Wtime() - time_start_comm;
+
+
 		/* The freshly received xup and xdown have to be put in the grid. */
 		for (i = 0; i < grains[X_COORD]; i++) {
 			grid[i + 1][grains[Y_COORD] + 1] = xup[i];
 			grid[i + 1][0] = xdown[i];
 		}
 
-      time_start_comm = MPI_Wtime();
+		time_start_comm = MPI_Wtime();
 		MPI_Send((void *)(grid[grains[X_COORD]] + 1), grains[Y_COORD], MPI_GRID_TYPE,
 				rank_rneigh, Y_RIGHT_TAG, comm);
 		MPI_Send((void *)(grid[1] + 1), grains[Y_COORD], MPI_GRID_TYPE,
@@ -299,20 +310,22 @@ int main(int argc, char *argv[])
 				rank_lneigh, Y_RIGHT_TAG, comm, &yright_status);
 		MPI_Recv((void *)(grid[grains[X_COORD] + 1] + 1), grains[Y_COORD], MPI_GRID_TYPE,
 				rank_rneigh, Y_LEFT_TAG, comm, &yleft_status);
-      
+
 		time_end_comm += MPI_Wtime() - time_start_comm;
-	
+
 		/* Do a non blocking send of the current grid for printing. */
 		if ((time % params.freq) == 0) 
 			send_grid(grid, grains, offset, rank, comm, &time_end_comm, PRINT_COMM);
 
 		time_start_comp = MPI_Wtime();
+		/* Process the grid per column. */
 		for (x = 1; x < grains[X_COORD] + 1; x++) {
 #ifdef NO_SSE
 			for (y = ystart; y < grains[Y_COORD] + yend; y++) {
 				/* Do the finite difference computation. */
-				ngrid[x][y] = grid[x][y] + ratio * (grid[x][y + 1] + grid[x][y - 1]
-						+ grid[x + 1][y] + grid[x - 1][y] - 4 * grid[x][y]);
+				ngrid[x][y] = ratio * (grid[x][y + 1] + grid[x][y - 1]
+						+ grid[x + 1][y] + grid[x - 1][y]) 
+					+ ratio1 *  grid[x][y];
 			}
 #else
 			for (i = 0, y = ystart; i < y_qdl; ++i, y += SIMD_CAPACITY) {
@@ -322,19 +335,35 @@ int main(int argc, char *argv[])
 				 * r0 = (x, y)
 				 */
 				curr_grid = _mm_loadu_pd(grid[x] + y);
+				/* rr0 = (x + 1, y + 1)
+				 * rr0 = (x + 1, y) */
 				currr_grid = _mm_loadu_pd(grid[x + 1] + y);
+				/* rl0 = (x - 1, y + 1)
+				 * rl0 = (x - 1, y) */
 				currl_grid = _mm_loadu_pd(grid[x - 1] + y);
+				/* ru0 = (x, y + 2)
+				 * ru0 = (x, y + 1) */
 				curru_grid = _mm_loadu_pd(grid[x] + y + 1);
+				/* rd0 = (x, y)
+				 * rd0 = (x, y - 1) */
 				currd_grid = _mm_loadu_pd(grid[x] + y - 1);
 
 				/* Perform arithmetic in an order which should reduce the number of
 				 * bubbles in the processor pipeline. */
+				/* rr = rr + rl */
 				currr_grid = _mm_add_pd(currr_grid, currl_grid);
+				/* ru = ru + rd */
 				curru_grid = _mm_add_pd(curru_grid, currd_grid);
+				/* nr = (1 - 4 * ratio) * rr */
 				ngrid_sse = _mm_mul_pd(curr_grid, sse_ratio1);
+				/* rr = rr + ru */
 				currr_grid = _mm_add_pd(currr_grid, curru_grid);
+				/* rr += ratio */
 				currr_grid = _mm_mul_pd(currr_grid, sse_ratio);
+				/* nr += rr */
 				ngrid_sse = _mm_add_pd(currr_grid, ngrid_sse);
+				/* (x, y + 1) = nr1
+				 * (x, y) = nr0 */
 				_mm_storeu_pd(ngrid[x] + y, ngrid_sse);
 #	else
 				/* Load all the necessary values to  SSE variables. */
@@ -361,9 +390,11 @@ int main(int argc, char *argv[])
 #	endif /* DOUBLE */
 			}
 
+			/* Compute the remaining points. */
 			for (i = 0; i < y_qdl_r; ++i) {
-				ngrid[x][y] = grid[x][y] + ratio * (grid[x][y + 1] + grid[x][y - 1]
-						+ grid[x + 1][y] + grid[x - 1][y] - 4 * grid[x][y]);
+				ngrid[x][y] = ratio * (grid[x][y + 1] + grid[x][y - 1]
+						+ grid[x + 1][y] + grid[x - 1][y]) 
+					+ ratio1 *  grid[x][y];
 				y++;
 			}
 #endif /* NO_SSE */
@@ -405,19 +436,22 @@ int main(int argc, char *argv[])
 	/* Get all the information on the running time. */
 	if (rank == 0) {
 		for (i = 1; i < nnodes; ++i) {
-			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_COMM_TAG, MPI_COMM_WORLD, &time_sts);
+			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_COMM_TAG,
+					MPI_COMM_WORLD, &time_sts);
 			time_end_comm += time_recv_buf;
 
-			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_COMP_TAG, MPI_COMM_WORLD, &time_sts);
+			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_COMP_TAG,
+					MPI_COMM_WORLD, &time_sts);
 			time_end_comp += time_recv_buf;
 
-			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_INIT_TAG, MPI_COMM_WORLD, &time_sts);
+			MPI_Recv(&time_recv_buf, 1, MPI_DOUBLE, i, TIME_INIT_TAG,
+					MPI_COMM_WORLD, &time_sts);
 			time_end_init += time_recv_buf;
 		}
 		if (statusfile != NULL) {
 			time_end_total = MPI_Wtime() - time_start_total;
-			fprintf(statusfile, "%i %i %i %li %lf %lf %lf %lf %li\n", nnodes,
-					gsize[X_COORD], gsize[Y_COORD], sizeof(grid_type),
+			fprintf(statusfile, "%s %i %i %i %li %lf %lf %lf %lf %li\n", argv[0],
+					nnodes, gsize[X_COORD], gsize[Y_COORD], sizeof(grid_type),
 					time_end_total, time_end_comp,
 					time_end_init, time_end_comm, time);
 			fclose(statusfile);
@@ -503,9 +537,9 @@ getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 	}
 	argc -= optind;
 	argv += optind;
-	
+
 	/* Although this could be computed every time, we prefer storing the values.
-	 */
+	*/
 	params->ntotal = (int)(1 / params->dx);
 	params->ttotal = (int)(1 / params->dt);
 

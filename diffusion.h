@@ -21,8 +21,8 @@
 #ifndef _DIFFUSION_H_
 #define _DIFFUSION_H_
 
-#include <mpi.h>
 #include "diffusion_help.h"
+#include <mpi.h>
 
 #define NUM_PARAMS 8
 
