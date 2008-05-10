@@ -25,9 +25,13 @@
 
 #include "diffusion_help.h"
 
-#define STEADY_TOLERANCE 1e-3
+#define STEADY_TOLERANCE 1e-40
 
 #define NUM_PARAMS 7
+
+#ifndef __FAST_MATH__
+#	warning enabling -ffast-math can really speed things up!
+#endif
 
 typedef struct {
 	grid_type dx;
