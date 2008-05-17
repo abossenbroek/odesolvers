@@ -29,18 +29,17 @@ send_grid(grid_type **grid, size_t *grains, int *offset, int rank,
    if (rank == 0)
       return;
 
-   MPI_Request dummy;
    double time_comm_start;
    size_t i;
 
    /* Send all the necessary data using a non blocking send. */
    time_comm_start = MPI_Wtime();
-   MPI_Isend((void *)grains, 2, MPI_INT, 0, base_tag, comm, &dummy);
-   MPI_Isend((void *)offset, 2, MPI_INT, 0, base_tag + 1, comm, &dummy);
+   MPI_Send((void *)grains, 2, MPI_INT, 0, base_tag, comm);
+   MPI_Send((void *)offset, 2, MPI_INT, 0, base_tag + 1, comm);
 
    for (i = 1; i < grains[X_COORD] + 1; i++)  
-      MPI_Isend((void *)(grid[i] + 1), grains[Y_COORD], MPI_GRID_TYPE, 0,
-            base_tag + i + 1, comm, &dummy);
+      MPI_Send((void *)(grid[i] + 1), grains[Y_COORD], MPI_GRID_TYPE, 0,
+            base_tag + i + 1, comm);
 
    *time_comm += MPI_Wtime() - time_comm_start;
 }
