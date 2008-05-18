@@ -6,7 +6,7 @@
 #include "mpi.h"
 #include "diffusion_help.h"
 
-   void
+void
 print_elem(long time, int rank, int x, size_t* grains, int* offset, 
       grid_type *column, void *fd)
 {
@@ -94,7 +94,7 @@ recv_grid(grid_type **grid, size_t *grains, int *offset, long time, int rank,
 
          *time_comm += MPI_Wtime() - time_comm_start;
          /* Print the buffer to the file. */
-         handler(time, proc, (int)(offset[X_COORD] + x), recv_grains, recv_offset,
+         handler(time, proc, (int)(recv_offset[X_COORD] + x), recv_grains, recv_offset,
                recv_buff, handlerargs);
       }
 
