@@ -1,16 +1,19 @@
 diffusion_files=diffusion.c diffusion.h 
 diffusion_help_files=diffusion_help.h diffusion_help.c
-tidiffusion_files= tidiffusion.h tidiffusion.c
+tidiffusion_files=tidiffusion.h tidiffusion.c
+gaussseidel_files=gaussseidel.h gaussseidel.c
 # -ffast-math really makes a difference!
 OPTFLAGS=-msse -msse2 -mtune=pentium4 -O3 -falign-loops -fmove-loop-invariants -ffast-math -fno-trapping-math 
 CFLAGS=-std=gnu9x -Wall -pedantic -g -Wextra 
 LDFLAGS=-lm
 
-all: allwave alldiffusion alltidiffusion
+all: allwave alldiffusion alltidiffusion allgaussseidel
 
 alldiffusion: diffus diffusdbl diffusdblnosse diffusnosse
 
 alltidiffusion: tidiffus tidiffusdbl tidiffusdblnosse tidiffusnosse
+
+allgaussseidel: gausss gausssdbl gausssdblnosse gausssnosse
 
 allwave: wave wavenosse
 
@@ -86,7 +89,32 @@ tidiffusiondbl.o: $(tidiffusion_files) $(diffusion_help_files)
 tidiffusiondblnosse.o: $(tidiffusion_files) $(diffusion_help_files)
 	mpicc -o tidiffusiondblnosse.o -c tidiffusion.c $(CFLAGS) $(OPTFLAGS) -DDOUBLE -DNO_SSE
 
+gausss: gaussseidel.o diffusion_help.o
+	mpicc $(LDFLAGS) -o gausss gaussseidel.o diffusion_help.o
+
+gausssnosse: gaussseidelnosse.o diffusion_helpnosse.o
+	mpicc $(LDFLAGS) -o gausssnosse gaussseidelnosse.o diffusion_helpnosse.o
+
+gaussseidel.o: $(gaussseidel_files) $(diffusion_help_files)
+	mpicc -o gaussseidel.o -c gaussseidel.c $(CFLAGS) $(OPTFLAGS)
+
+gausssdbl: gaussseideldbl.o diffusion_helpdbl.o
+	mpicc $(LDFLAGS) -o gausssdbl gaussseideldbl.o diffusion_helpdbl.o
+
+gausssdblnosse: gaussseideldblnosse.o diffusion_helpdblnosse.o
+	mpicc $(LDFLAGS) -o gausssdblnosse gaussseideldblnosse.o diffusion_helpdblnosse.o
+
+gaussseidelnosse.o: $(gaussseidel_files) $(diffusion_help_files)
+	mpicc -o gaussseidelnosse.o -c gaussseidel.c $(CFLAGS) $(OPTFLAGS) -DNO_SSE 
+
+gaussseideldbl.o: $(gaussseidel_files) $(diffusion_help_files)
+	mpicc -o gaussseideldbl.o -c gaussseidel.c $(CFLAGS) $(OPTFLAGS) -DDOUBLE
+
+gaussseideldblnosse.o: $(gaussseidel_files) $(diffusion_help_files)
+	mpicc -o gaussseideldblnosse.o -c gaussseidel.c $(CFLAGS) $(OPTFLAGS) -DDOUBLE -DNO_SSE
+
 clean:
 	rm -f *o wave wavenosse diffus diffusnosse diffusdbl diffusdblnosse tidiffus \
-		tidiffusdbl tidiffusdblnosse tidiffusnosse
+		tidiffusdbl tidiffusdblnosse tidiffusnosse gausss gausssnosse gausssdbl \
+		gausssdblnosse
 	
