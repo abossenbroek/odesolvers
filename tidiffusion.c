@@ -294,8 +294,8 @@ main(int argc, char *argv[])
             rank_lneigh, Y_LEFT_TAG, comm);
       MPI_Recv((void *)(grid[0] + 1), grains[Y_COORD], MPI_GRID_TYPE,
             rank_lneigh, Y_RIGHT_TAG, comm, &yright_status);
-      MPI_Recv((void *)(grid[grains[X_COORD] + 1] + 1), grains[Y_COORD], MPI_GRID_TYPE,
-            rank_rneigh, Y_LEFT_TAG, comm, &yleft_status);
+      MPI_Recv((void *)(grid[grains[X_COORD] + 1] + 1), grains[Y_COORD],
+            MPI_GRID_TYPE, rank_rneigh, Y_LEFT_TAG, comm, &yleft_status);
 
       time_end_comm += MPI_Wtime() - time_start_comm;
 
