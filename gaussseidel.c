@@ -53,10 +53,9 @@ int getparams(int argc, char *argv[], pparams *params, FILE **gridfile,
 static __inline void __attribute__((__always_inline__)) compute_grid(grid_type
       **grid, size_t *grains, int *offset, int rank_rneigh, int rank_lneigh,
       int rank_dneigh, int rank_uneigh, grid_type *xcache, grid_type *ycache,
-      MPI_Comm comm, MPI_Status *yright_status, MPI_Status *xup_status, size_t
-      ystart, size_t yend, double *time_end_comp, double *time_end_comm,
-      MPI_Request *yright_rqst, MPI_Request *xup_request, bool *is_steady, int
-      color);
+      MPI_Comm comm, size_t ystart, size_t yend, double *time_end_comp, double
+      *time_end_comm, MPI_Request *yright_rqst, MPI_Request *xup_request, bool
+      *is_steady, int color);
 
 int 
 main(int argc, char *argv[])
@@ -82,8 +81,8 @@ main(int argc, char *argv[])
    int rank_rneigh;
    int rank_uneigh;
    int rank_dneigh;
-   MPI_Status xup_status;
-   MPI_Status yright_status;
+   int color_offset;
+   int color_comm;
 
    double time_start_comm = 0;
    double time_start_init = 0;
@@ -211,8 +210,8 @@ main(int argc, char *argv[])
          MPI_Abort(comm, EX_OSERR);
 
    /* Create temporary storage to prevent iterating through the entire grid. */
-   if (((xcache = calloc(grains[X_COORD] / 2, sizeof(grid_type))) == NULL) || 
-         ((ycache = calloc(grains[Y_COORD] / 2, sizeof(grid_type))) == NULL))
+   if (((xcache = calloc(grains[X_COORD] / 2 + 1, sizeof(grid_type))) == NULL) || 
+         ((ycache = calloc(grains[Y_COORD] / 2 + 1, sizeof(grid_type))) == NULL))
       MPI_Abort(comm, EX_OSERR);
 
 
@@ -267,22 +266,39 @@ main(int argc, char *argv[])
    time_end_init = MPI_Wtime() - time_start_init;
 
 
+   if (((offset[X_COORD] + 1 + ystart) % 2) == 0)
+      color_offset = 1;
+   else 
+      color_offset = 0;
+
+   color_comm = 1;
+
    /* Only the up and right nodes need information from this node. */
-   for (i = 1; i < grains[X_COORD] / 2; i += 2) 
-      xcache[i] = grid[i + 1][grains[Y_COORD]];
+   for (i = color_offset; i < grains[X_COORD] + 1; i += 2) 
+      xcache[i / 2] = grid[i + 1][grains[Y_COORD]];
    
-   for (i = 1; i < grains[Y_COORD] / 2; i += 2) 
-      ycache[i] = grid[grains[X_COORD] + 1][i + 1];
+   for (i = color_offset; i < grains[Y_COORD] + 1; i += 2)
+      ycache[i / 2] = grid[grains[X_COORD]][i + 1];
 
+   /* Send using non-blocking operations. */
+   MPI_Send((void *)xcache, grains[X_COORD] / 2 + 1, MPI_GRID_TYPE, rank_uneigh,
+         MPI_COLOR_DOWN + !color_comm, comm);
+   MPI_Send((void *)ycache, grains[Y_COORD] / 2 + 1,
+         MPI_GRID_TYPE, rank_rneigh, MPI_COLOR_LEFT + !color_comm, comm);
 
-   time_start_comm = MPI_Wtime();
+   /* Only the up and right nodes need information from this node. */
+   for (i = !color_offset; i < grains[X_COORD]; i += 2) 
+      xcache[i / 2] = grid[i + 1][1];
+   
+   for (i = !color_offset; i < grains[Y_COORD] + 1; i += 2) 
+      ycache[i / 2] = grid[1][i + 1];
 
-   /* Initial send. */
-   MPI_Send((void *)xcache, grains[X_COORD] / 2, MPI_GRID_TYPE, rank_uneigh,
-         MPI_COLOR_X, comm);
+   /* Send using non-blocking operations. */
+   MPI_Send((void *)xcache, grains[X_COORD] / 2 + 1, MPI_GRID_TYPE, rank_dneigh,
+         MPI_COLOR_UP + !color_comm, comm);
+   MPI_Send((void *)ycache, grains[Y_COORD] / 2 + 1,
+         MPI_GRID_TYPE, rank_lneigh, MPI_COLOR_RIGHT + !color_comm, comm);
 
-   MPI_Send((void *)ycache, grains[Y_COORD] / 2,
-         MPI_GRID_TYPE, rank_rneigh, MPI_COLOR_Y, comm);
    time_end_comm += MPI_Wtime() - time_start_comm;
    
    for (time = 0; !is_steady && time < params.ttotal; time++)
@@ -290,8 +306,8 @@ main(int argc, char *argv[])
 
       compute_grid(grid, grains, offset, rank_rneigh,
             rank_lneigh, rank_dneigh, rank_uneigh, xcache, ycache, comm,
-            &yright_status, &xup_status, ystart, yend, &time_end_comp,
-            &time_end_comm, &yright_rqst, &xup_rqst, &is_steady, RED);
+            ystart, yend, &time_end_comp, &time_end_comm, &yright_rqst,
+            &xup_rqst, &is_steady, RED);
 
       MPI_Barrier(comm);
       if (time % params.freq == 0) {
@@ -301,9 +317,9 @@ main(int argc, char *argv[])
                (void *)profilefile);
       }
       compute_grid(grid, grains, offset, rank_rneigh,
-            rank_lneigh, rank_dneigh, rank_uneigh, xcache, ycache, comm,
-            &yright_status, &xup_status, ystart, yend, &time_end_comp,
-            &time_end_comm, &yright_rqst, &xup_rqst, &is_steady, BLACK);
+            rank_lneigh, rank_dneigh, rank_uneigh, xcache, ycache, comm, ystart,
+            yend, &time_end_comp, &time_end_comm, &yright_rqst, &xup_rqst,
+            &is_steady, BLACK);
       MPI_Barrier(comm);
 
       if (time % params.freq == 0) {
@@ -382,10 +398,9 @@ main(int argc, char *argv[])
 static __inline void __attribute__((__always_inline__)) 
 compute_grid(grid_type **grid, size_t *grains, int *offset, int rank_rneigh,
       int rank_lneigh, int rank_dneigh, int rank_uneigh, grid_type *xcache,
-      grid_type *ycache, MPI_Comm comm, MPI_Status *yright_status, MPI_Status
-      *xup_status, size_t ystart, size_t yend, double *time_end_comp, double
-      *time_end_comm, MPI_Request *yright_rqst, MPI_Request *xup_rqst, bool
-      *is_steady, int color) 
+      grid_type *ycache, MPI_Comm comm, size_t ystart, size_t yend, double
+      *time_end_comp, double *time_end_comm, MPI_Request *yright_rqst,
+      MPI_Request *xup_rqst, bool *is_steady, int color) 
 {
    double time_start;
    size_t x;
@@ -394,6 +409,7 @@ compute_grid(grid_type **grid, size_t *grains, int *offset, int rank_rneigh,
    grid_type gridpoint;
    size_t color_offset;
    int color_comm;
+   MPI_Status dummy;
 
    time_start = MPI_Wtime();
    
@@ -402,29 +418,32 @@ compute_grid(grid_type **grid, size_t *grains, int *offset, int rank_rneigh,
    else 
       color_offset = (color == RED);
    
-   color_comm = (color != RED);
-
-   warnx("Color is %i", color);
+   color_comm = (color == BLACK);
 
    /* For this computation we only need information from the left and
     * lower nodes. */
-   MPI_Recv((void *)xcache, grains[X_COORD] / 2, MPI_GRID_TYPE, rank_dneigh,
-         MPI_COLOR_X + color_comm, comm, xup_status);
-
-   for (i = color_comm; i < grains[X_COORD]; i += 2) {
-      //warnx("(%i, %i) was %f", i + 1, 0, grid[i][0]);
-      grid[i + 1][0] = xcache[i / 2];
-      //warnx("(%i, %i) is %f", i + 1, 0, grid[i][0]);
-   }
-
-   MPI_Recv((void *)(grid[0] + 1), grains[Y_COORD] / 2, MPI_GRID_TYPE,
-         rank_lneigh, MPI_COLOR_Y + color_comm, comm, yright_status);
+   MPI_Recv((void *)xcache, grains[X_COORD] / 2 + 1, MPI_GRID_TYPE, rank_dneigh,
+         MPI_COLOR_DOWN + color_comm, comm, &dummy);
+   MPI_Recv((void *)ycache, grains[Y_COORD] / 2 + 1, MPI_GRID_TYPE,
+         rank_lneigh, MPI_COLOR_LEFT + color_comm, comm, &dummy);
    
-   for (i = color_comm; i < grains[Y_COORD]; i += 2) {
-      //warnx("(%i, %i) was %f", grains[X_COORD] + 1, i + 1, grid[i][0]);
+   for (i = !color_offset; i < grains[X_COORD] + 1; i += 2) 
+      grid[i + 1][grains[Y_COORD] + 1] = xcache[i / 2];
+   
+   for (i = !color_offset; i < grains[Y_COORD] + 1; i += 2) 
+      grid[0][i + 1] = ycache[i / 2];
+   
+   MPI_Recv((void *)xcache, grains[X_COORD] / 2 + 1, MPI_GRID_TYPE, rank_uneigh,
+         MPI_COLOR_UP + color_comm, comm, &dummy);
+   MPI_Recv((void *)ycache, grains[Y_COORD] / 2 + 1, MPI_GRID_TYPE,
+         rank_lneigh, MPI_COLOR_RIGHT + color_comm, comm, &dummy);
+
+   for (i = color_offset; i < grains[X_COORD] + 1; i += 2) 
+      grid[i + 1][0] = xcache[i / 2];
+  
+   for (i = color_offset; i < grains[Y_COORD] + 1; i += 2) {
       grid[grains[X_COORD] + 1][i + 1] = ycache[i / 2];
-      //warnx("(%i, %i) is %f", grains[X_COORD] + 1, i + 1, grid[i][0]);
-   }
+   
 
    *time_end_comm += MPI_Wtime() - time_start;
 
@@ -448,26 +467,34 @@ compute_grid(grid_type **grid, size_t *grains, int *offset, int rank_rneigh,
    
    *time_end_comp += MPI_Wtime() - time_start;
    
-   /* Only the up and right nodes need information from this node. */
-   for (i = color_comm; i < grains[X_COORD]; i += 2) {
-      xcache[i / 2] = grid[i + 1][grains[Y_COORD]];
-      warnx("xcache[%i] %lf", i, xcache[i / 2]);
-   }
-
    time_start = MPI_Wtime();
-   /* Send using non-blocking operations. */
-   MPI_Isend((void *)xcache, grains[X_COORD] / 2, MPI_GRID_TYPE, rank_uneigh,
-         MPI_COLOR_X + !color_comm, comm, xup_rqst);
+   /* Only the up and right nodes need information from this node. */
+   for (i = color_offset; i < grains[X_COORD] + 1; i += 2) 
+      xcache[i / 2] = grid[i + 1][grains[Y_COORD]];
    
-   for (i = color_comm; i < grains[Y_COORD]; i += 2) {
+   for (i = color_offset; i < grains[Y_COORD] + 1; i += 2) 
       ycache[i / 2] = grid[grains[X_COORD]][i + 1];
-      warnx("ycache[%i] %lf", i, ycache[i / 2]);
-   }
 
-   MPI_Isend((void *)ycache, grains[Y_COORD] / 2,
-         MPI_GRID_TYPE, rank_rneigh, MPI_COLOR_Y + !color_comm, comm, yright_rqst);
+   /* Send using non-blocking operations. */
+   MPI_Isend((void *)xcache, grains[X_COORD] / 2 + 1, MPI_GRID_TYPE, rank_uneigh,
+         MPI_COLOR_DOWN + !color_comm, comm, xup_rqst);
+   MPI_Isend((void *)ycache, grains[Y_COORD] / 2 + 1,
+         MPI_GRID_TYPE, rank_rneigh, MPI_COLOR_LEFT + !color_comm, comm, yright_rqst);
+
+   /* Only the up and right nodes need information from this node. */
+   for (i = !color_offset; i < grains[X_COORD]; i += 2) 
+      xcache[i / 2] = grid[i + 1][1];
+   
+   for (i = !color_offset; i < grains[Y_COORD] + 1; i += 2) 
+      ycache[i / 2] = grid[1][i + 1];
+
+   /* Send using non-blocking operations. */
+   MPI_Isend((void *)xcache, grains[X_COORD] / 2 + 1, MPI_GRID_TYPE, rank_dneigh,
+         MPI_COLOR_UP + !color_comm, comm, xup_rqst);
+   MPI_Isend((void *)ycache, grains[Y_COORD] / 2 + 1,
+         MPI_GRID_TYPE, rank_lneigh, MPI_COLOR_RIGHT + !color_comm, comm, yright_rqst);
+
    *time_end_comm += MPI_Wtime() - time_start;
-
 }
 
 int
