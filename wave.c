@@ -287,7 +287,7 @@ main(int argc, char *argv[])
           * _mm_set_pd(double w, double x) loads w to r0 and x to r1 
           *
           * The computations are the same as in the previous loop. */
-			pde_c_simd_xl = _mm_loadu_pd(pde_c + j);
+			pde_c_simd_xl = _mm_loadu_pd(pde_c + j - 1);
 			pde_c_simd_xu = _mm_loadu_pd(pde_c + j + 1);
          /* Load the old values immediately to the new values. */
          pde_n_simd = _mm_set_pd(-pde_o[j + 1], -pde_o[j]);
@@ -526,7 +526,8 @@ getparams(int argc, char *argv[], solve_params *params, FILE **wavefile,
    if (params->delta < 0 || 
          (params->location > 0 && params->periods > 0) || 
          (params->location < 0 && params->periods < 0) ||
-         params->ntotal < 0) {
+         (params->ntotal < 2) ||
+			(params->stime / params->delta < 1)) {
       fprintf(stderr, "Illegal parameters->\n");
       usage();
    }
